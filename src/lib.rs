@@ -1,5 +1,19 @@
 use std::io;
 
+pub struct Lock {
+    name: String,
+}
+
+impl Lock {
+    pub fn new(n: String) -> Self {
+        Self { name: n }
+    }
+
+    pub fn hello(&self) {
+        println!("{}", &self.name);
+    }
+}
+
 pub struct MyStruct {}
 
 impl MyStruct {
