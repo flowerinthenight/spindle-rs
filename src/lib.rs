@@ -18,19 +18,14 @@ pub struct Lock {
 
 impl Lock {
     pub fn new(name: String, db: String) -> Self {
-        let endpoint = "spanner.googleapis.com:443";
         let env = Arc::new(EnvBuilder::new().build());
         let creds = ChannelCredentials::google_default_credentials().unwrap();
-
-        // Create Spanner client.
         let chan = ChannelBuilder::new(env.clone())
             .max_send_message_len(100 << 20)
             .max_receive_message_len(100 << 20)
             .set_credentials(creds)
-            .connect(&endpoint);
+            .connect("spanner.googleapis.com:443");
         let client = SpannerClient::new(chan);
-
-        // Connect to the instance and create a Spanner session.
         let mut req = CreateSessionRequest::new();
         req.database = db.to_string();
         let mut meta = MetadataBuilder::new();
@@ -56,15 +51,9 @@ impl Lock {
         req.sql = "select * from alerts".to_string();
         let out = self.client.execute_sql(&req).unwrap();
         for i in out.get_rows() {
-            let v0 = i.get_values().get(0);
-            match &v0.unwrap_or_default().kind {
-                Some(v) => match v {
-                    Value_oneof_kind::string_value(v) => {
-                        println!("val={}", v)
-                    }
-                    _ => {}
-                },
-                _ => {}
+            let v0 = i.get_values().get(0).unwrap();
+            if let Some(Value_oneof_kind::string_value(v)) = &v0.kind {
+                println!("val={}", v)
             }
         }
     }
@@ -72,7 +61,7 @@ impl Lock {
     pub fn inc(&self) {
         let v = Arc::clone(&self.active);
         println!("atomic={}", v.fetch_add(1, Ordering::SeqCst));
-        println!("timeout={}", &self.timeout.unwrap_or_else(|| 5000));
+        println!("timeout={}", &self.timeout.unwrap_or(5000));
     }
 }
 
