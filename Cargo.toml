@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 google-cloud-rust-raw = "=0.15.0"
 grpcio = "0.12.1"
+protobuf = "2.28.0"
