@@ -9,15 +9,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     println!("args[0]={:?}", args.get(1));
 
-    let lock = Lock::new(
-        "spindle".to_string(),
-        "projects/mobingi-main/instances/alphaus-prod/databases/main".to_string(),
-    );
+    let lock = LockBuilder::new()
+        .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
+        .table("locktable".to_string())
+        .name("spindle-rs".to_string())
+        .id(":8080".to_string())
+        .timeout(5000)
+        .build();
 
+    println!("____query1____");
     lock.query();
+    println!("____query2____");
     lock.query();
     lock.inc();
     lock.inc();
+    println!("____dml1____");
+    lock.dml();
 
     let (tx, rx) = mpsc::channel();
 
