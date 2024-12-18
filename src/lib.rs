@@ -209,4 +209,17 @@ mod tests {
         let result = add(2, 2);
         assert_eq!(result, 4);
     }
+
+    #[test]
+    fn label() {
+        let cond = 1;
+        let result = 'b: {
+            if cond < 5 {
+                break 'b 1;
+            } else {
+                break 'b 2;
+            }
+        };
+        assert_eq!(result, 1);
+    }
 }
