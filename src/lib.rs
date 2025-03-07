@@ -12,6 +12,7 @@ use protobuf::RepeatedField;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 struct LockVal {
     pub name: String,
@@ -28,6 +29,10 @@ pub struct Lock {
     session: Session,
     active: Arc<AtomicUsize>,
     timeout: u64,
+}
+
+async fn async_fn(){
+    println!("this is an async fn!");
 }
 
 impl Lock {
@@ -116,6 +121,16 @@ impl Lock {
         println!("atomic={}", v.fetch_add(1, Ordering::SeqCst));
         // println!("timeout={}", &self.timeout.unwrap_or(5000));
         println!("timeout={}", self.timeout);
+    }
+
+    pub fn call_async(&self) {
+        println!("start: call async from sync");
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            async_fn().await;
+        });
+
+        println!("end: call async from sync");
     }
 }
 

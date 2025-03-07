@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     lock.inc();
     lock.inc();
     println!("____dml1____");
-    lock.dml();
+    lock.call_async();
 
     let (tx, rx) = mpsc::channel();
 
