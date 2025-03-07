@@ -13,6 +13,8 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use google_cloud_spanner::client::Client;
+use google_cloud_spanner::client::ClientConfig;
 
 struct LockVal {
     pub name: String,
@@ -29,10 +31,7 @@ pub struct Lock {
     session: Session,
     active: Arc<AtomicUsize>,
     timeout: u64,
-}
-
-async fn async_fn(){
-    println!("this is an async fn!");
+    // spclient: Client,
 }
 
 impl Lock {
@@ -123,15 +122,26 @@ impl Lock {
         println!("timeout={}", self.timeout);
     }
 
+    async fn async_fn(&self, input: String){
+        println!("this is an async fn!, input={}", input);
+    }
+
     pub fn call_async(&self) {
         println!("start: call async from sync");
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            async_fn().await;
+            self.async_fn("hello-world".to_string()).await;
         });
 
         println!("end: call async from sync");
     }
+}
+
+async fn spclient() -> Client {
+    const DB: &str = "projects/mobingi-main/instances/alphaus-prod/databases/main";
+    let config = ClientConfig::default().with_auth().await.unwrap();
+    let client = Client::new(DB, config).await.unwrap();
+    client
 }
 
 #[derive(Default)]
@@ -172,6 +182,7 @@ impl LockBuilder {
         self.timeout = timeout;
         self
     }
+
 
     pub fn build(self) -> Lock {
         let env = Arc::new(EnvBuilder::new().build());
