@@ -1,4 +1,4 @@
-use spindle_rs::*;
+use spindle::*;
 use std::env;
 use std::error::Error;
 use std::sync::mpsc;
@@ -17,14 +17,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .timeout(5000)
         .build();
 
-    println!("____query1____");
-    lock.query();
-    println!("____query2____");
-    lock.query();
     lock.inc();
     lock.inc();
-    println!("____dml1____");
-    lock.call_async();
+    // lock.call_async();
+    lock.call_async_query();
 
     let (tx, rx) = mpsc::channel();
 
