@@ -18,6 +18,51 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use tokio::runtime::Runtime;
 
+const DB: &str = "projects/mobingi-main/instances/alphaus-prod/databases/main";
+
+async fn async_client() -> Arc<Client> {
+    let config = ClientConfig::default().with_auth().await.unwrap();
+    Arc::new(Client::new(DB, config).await.unwrap())
+}
+
+pub fn get_client() -> Arc<Client> {
+    let (tx, rx) = mpsc::channel();
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        tx.send(async_client().await).unwrap();
+    });
+
+    rx.recv().unwrap()
+}
+
+async fn async_query(client: &Client) {
+    println!("start spanner query");
+
+    // const DATABASE: &str = "projects/mobingi-main/instances/alphaus-prod/databases/main";
+    // let config = ClientConfig::default().with_auth().await.unwrap();
+    // let client = Client::new(DATABASE, config).await.unwrap();
+
+    let mut stmt = Statement::new("select mask from mask_id where name = @name");
+    stmt.add_param("name", &"000000009586");
+    let mut tx = client.single().await.unwrap();
+    println!("before query");
+    let mut iter = tx.query(stmt).await.unwrap();
+    println!("before while");
+    while let Some(row) = iter.next().await.unwrap() {
+        let m = row.column_by_name::<String>("mask");
+        print!("mask={:?}", m)
+    }
+
+    // client.close().await;
+}
+
+pub fn do_query(client: &Client) {
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        async_query(client).await;
+    });
+}
+
 struct LockVal {
     pub name: String,
     pub heartbeat: String,
@@ -33,7 +78,6 @@ pub struct Lock {
     // session: Session,
     active: Arc<AtomicUsize>,
     timeout: u64,
-    spclient: Client,
 }
 
 impl Lock {
@@ -123,53 +167,6 @@ impl Lock {
         // println!("timeout={}", &self.timeout.unwrap_or(5000));
         println!("timeout={}", self.timeout);
     }
-
-    async fn async_fn(&self, input: String) -> i32 {
-        println!("this is an async fn!, input={}", input);
-        12
-    }
-
-    pub fn call_async(&self) {
-        println!("start: call async from sync");
-        let (tx, rx) = mpsc::channel();
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let ret = self.async_fn("hello-world".to_string()).await;
-            tx.send(ret).unwrap();
-        });
-
-        let recv = rx.recv().unwrap();
-        println!("return from async {}", recv);
-        println!("end: call async from sync");
-    }
-
-    pub fn call_async_query(&self) {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            async_query(&self.spclient).await;
-        });
-    }
-}
-
-async fn async_client() -> Client {
-    const DB: &str = "projects/mobingi-main/instances/alphaus-prod/databases/main";
-    let config = ClientConfig::default().with_auth().await.unwrap();
-    let client = Client::new(DB, config).await.unwrap();
-    client
-}
-
-async fn async_query(client: &Client) {
-    println!("start spanner query");
-    let mut stmt = Statement::new("select mask from mask_id where name = @name");
-    stmt.add_param("name", &"000000009586");
-    let mut tx = client.single().await.unwrap();
-    println!("before query");
-    let mut iter = tx.query(stmt).await.unwrap();
-    println!("before while");
-    while let Some(row) = iter.next().await.unwrap() {
-        let m = row.column_by_name::<String>("mask");
-        print!("mask={:?}", m)
-    }
 }
 
 #[derive(Default)]
@@ -229,14 +226,12 @@ impl LockBuilder {
         // let opt = CallOption::default().headers(meta.build());
         // let session = client.create_session_opt(&req, opt).unwrap();
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::channel();
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             let c = async_client().await;
             tx.send(c).unwrap();
         });
-
-        let spc = rx.recv().unwrap();
 
         Lock {
             table: self.table,
@@ -246,7 +241,6 @@ impl LockBuilder {
             // session,
             active: Arc::new(AtomicUsize::new(0)),
             timeout: self.timeout,
-            spclient: spc,
         }
     }
 }

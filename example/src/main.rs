@@ -9,6 +9,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     println!("args[0]={:?}", args.get(1));
 
+    let c = get_client();
+    do_query(&c);
+
     let lock = LockBuilder::new()
         .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
         .table("locktable".to_string())
@@ -19,8 +22,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     lock.inc();
     lock.inc();
-    // lock.call_async();
-    lock.call_async_query();
 
     let (tx, rx) = mpsc::channel();
 

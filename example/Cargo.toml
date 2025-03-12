@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 spindle = { path = "../spindle" }
+tokio = { version = "1.43.0", features = ["full"] }
+google-cloud-spanner = { package="gcloud-spanner", version="1.0.0" }
