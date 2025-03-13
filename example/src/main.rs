@@ -1,18 +1,13 @@
 use spindle::*;
 use std::env;
 use std::error::Error;
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     println!("args[0]={:?}", args.get(1));
 
-    let c = get_client();
-    do_query(&c);
-
-    let lock = LockBuilder::new()
+    let mut lock = LockBuilder::new()
         .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
         .table("locktable".to_string())
         .name("spindle-rs".to_string())
@@ -22,29 +17,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     lock.inc();
     lock.inc();
+    lock.run();
+    lock.close();
 
-    let (tx, rx) = mpsc::channel();
-
-    let thr = thread::spawn(move || {
-        let vals = vec![
-            String::from("hi"),
-            String::from("from"),
-            String::from("the"),
-            String::from("child"),
-            String::from("thread"),
-        ];
-
-        for val in vals {
-            tx.send(val).unwrap();
-            thread::sleep(Duration::from_millis(100));
-        }
-    });
-
-    for received in rx {
-        println!("Got: {received}");
-    }
-
-    thr.join().unwrap();
+    thread::sleep(Duration::from_secs(2));
 
     Ok(())
 }
