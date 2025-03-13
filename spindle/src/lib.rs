@@ -94,7 +94,7 @@ impl Lock {
 
     pub fn inc(&self) {
         let v = Arc::clone(&self.active);
-        println!("atomic={}", v.fetch_add(1, Ordering::SeqCst));
+        println!("atomic={}", v.fetch_add(1, Ordering::Relaxed));
         // println!("timeout={}", &self.timeout.unwrap_or(5000));
         println!("timeout={}", self.timeout);
     }
