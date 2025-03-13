@@ -74,11 +74,16 @@ impl Lock {
 
     pub fn run(&mut self) {
         println!("table={}, name={}, id={}", self.table, self.name, self.id);
+
+        // Setup Spanner query thread. Delegate to a separate thread to have
+        // a better control over async calls and a tokio runtime.
         let (tx_data, rx_data): (Sender<i32>, Receiver<i32>) = mpsc::channel();
         let (tx_ctrl, rx_ctrl): (Sender<i32>, Receiver<i32>) = mpsc::channel();
         self.exit_tx.push(tx_ctrl.clone());
         let db = self.db.clone();
         let _thr = thread::spawn(move || spanner_caller(db, rx_ctrl, tx_data));
+
+        // Test Spanner query and get reply.
         tx_ctrl.send(1).unwrap();
         println!("reply for 1: {}", rx_data.recv().unwrap());
     }
