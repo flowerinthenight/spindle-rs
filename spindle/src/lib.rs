@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::{io, thread};
 use tokio::runtime::Runtime;
 
-pub fn get_client(rt: &Runtime, db: String) -> Client {
+pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     let (tx, rx) = mpsc::channel();
     rt.block_on(async {
         let config = ClientConfig::default().with_auth().await.unwrap();
@@ -17,6 +17,37 @@ pub fn get_client(rt: &Runtime, db: String) -> Client {
     });
 
     rx.recv().unwrap()
+}
+
+fn spanner_caller(db: String, rx_code: Receiver<i32>, tx_data: Sender<i32>) {
+    let rt = Runtime::new().unwrap();
+    let client = get_spanner_client(&rt, db);
+    for code in rx_code {
+        match code {
+            0 => {
+                println!("exit");
+                rt.block_on(async { client.close().await });
+                return;
+            }
+            1 => {
+                rt.block_on(async {
+                    let mut stmt = Statement::new("select mask from mask_id where name = @name");
+                    stmt.add_param("name", &"000000009586");
+                    let mut tx = client.single().await.unwrap();
+                    let mut iter = tx.query(stmt).await.unwrap();
+                    while let Some(row) = iter.next().await.unwrap() {
+                        let m = row.column_by_name::<String>("mask");
+                        println!("mask={:?}", m)
+                    }
+                });
+
+                tx_data.send(100).unwrap();
+            }
+            _ => {
+                println!("unsupported code: {}", code);
+            }
+        }
+    }
 }
 
 struct LockVal {
@@ -43,45 +74,13 @@ impl Lock {
 
     pub fn run(&mut self) {
         println!("table={}, name={}, id={}", self.table, self.name, self.id);
-        let (tx_sp, rx_sp): (Sender<i32>, Receiver<i32>) = mpsc::channel();
-        let (tx, rx): (Sender<i32>, Receiver<i32>) = mpsc::channel();
-        self.exit_tx.push(tx.clone());
+        let (tx_data, rx_data): (Sender<i32>, Receiver<i32>) = mpsc::channel();
+        let (tx_ctrl, rx_ctrl): (Sender<i32>, Receiver<i32>) = mpsc::channel();
+        self.exit_tx.push(tx_ctrl.clone());
         let db = self.db.clone();
-        let _thr = thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            let client = get_client(&rt, db);
-            for code in rx {
-                match code {
-                    0 => {
-                        println!("exit");
-                        rt.block_on(async { client.close().await });
-                        return;
-                    }
-                    1 => {
-                        rt.block_on(async {
-                            let mut stmt =
-                                Statement::new("select mask from mask_id where name = @name");
-                            stmt.add_param("name", &"000000009586");
-                            let mut tx = client.single().await.unwrap();
-                            let mut iter = tx.query(stmt).await.unwrap();
-                            while let Some(row) = iter.next().await.unwrap() {
-                                let m = row.column_by_name::<String>("mask");
-                                println!("mask={:?}", m)
-                            }
-                        });
-
-                        tx_sp.send(100).unwrap();
-                    }
-                    _ => {
-                        println!("unsupported code: {}", code);
-                    }
-                }
-            }
-        });
-
-        self.exit_tx[0].send(3).unwrap();
-        tx.send(1).unwrap();
-        println!("reply for 1: {}", rx_sp.recv().unwrap());
+        let _thr = thread::spawn(move || spanner_caller(db, rx_ctrl, tx_data));
+        tx_ctrl.send(1).unwrap();
+        println!("reply for 1: {}", rx_data.recv().unwrap());
     }
 
     pub fn close(&mut self) {
