@@ -42,19 +42,19 @@ impl Lock {
     }
 
     pub fn run(&mut self) {
+        println!("table={}, name={}, id={}", self.table, self.name, self.id);
+        let (tx_sp, rx_sp): (Sender<i32>, Receiver<i32>) = mpsc::channel();
         let (tx, rx): (Sender<i32>, Receiver<i32>) = mpsc::channel();
         self.exit_tx.push(tx.clone());
         let db = self.db.clone();
         let _thr = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             let client = get_client(&rt, db);
-            for i in rx {
-                match i {
+            for code in rx {
+                match code {
                     0 => {
                         println!("exit");
-                        rt.block_on(async {
-                            client.close().await;
-                        });
+                        rt.block_on(async { client.close().await });
                         return;
                     }
                     1 => {
@@ -69,9 +69,11 @@ impl Lock {
                                 println!("mask={:?}", m)
                             }
                         });
+
+                        tx_sp.send(100).unwrap();
                     }
                     _ => {
-                        println!("unsupported code: {}", i);
+                        println!("unsupported code: {}", code);
                     }
                 }
             }
@@ -79,6 +81,7 @@ impl Lock {
 
         self.exit_tx[0].send(3).unwrap();
         tx.send(1).unwrap();
+        println!("reply for 1: {}", rx_sp.recv().unwrap());
     }
 
     pub fn close(&mut self) {
