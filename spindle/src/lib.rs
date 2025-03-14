@@ -14,24 +14,10 @@ use std::{io, thread};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 
-#[derive(Debug)]
-struct DiffToken {
-    diff: i64,
-    token: i128,
-}
-
 #[derive(Debug, Clone)]
 struct HeartbeatMeta {
     signal_as_reply: bool,
     signal: Arc<AtomicUsize>,
-}
-
-#[derive(Debug)]
-struct LockVal {
-    name: String,
-    heartbeat: i128,
-    token: i128,
-    writer: String,
 }
 
 #[derive(Debug)]
@@ -41,6 +27,20 @@ enum ProtoCtrl {
     CheckLock,
     CurrentToken,
     Heartbeat(HeartbeatMeta),
+}
+
+#[derive(Debug)]
+struct DiffToken {
+    diff: i64,
+    token: i128,
+}
+
+#[derive(Debug)]
+struct LockVal {
+    name: String,
+    heartbeat: i128,
+    token: i128,
+    writer: String,
 }
 
 #[derive(Debug)]
@@ -207,7 +207,13 @@ impl Lock {
     }
 
     pub fn run(&mut self) {
-        info!("table={}, name={}, id={}", self.table, self.name, self.id);
+        info!(
+            "table={}, name={}, id={}, duration={:?}",
+            self.table,
+            self.name,
+            self.id,
+            Duration::from_millis(self.duration_ms)
+        );
 
         let leader = Arc::new(AtomicUsize::new(0));
 
@@ -378,28 +384,8 @@ impl LockBuilder {
     }
 }
 
-pub struct MyStruct {}
-
-impl MyStruct {
-    pub fn hello(&self) -> Result<usize, io::Error> {
-        Ok(100)
-    }
-}
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-
     #[test]
     fn label() {
         let cond = 1;
