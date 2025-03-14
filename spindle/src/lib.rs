@@ -1,3 +1,4 @@
+use exp_backoff::BackoffBuilder;
 use google_cloud_spanner::client::Client;
 use google_cloud_spanner::client::ClientConfig;
 use google_cloud_spanner::statement::Statement;
@@ -5,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::Duration;
 use std::{io, thread};
 use tokio::runtime::Runtime;
 
@@ -86,6 +88,9 @@ impl Lock {
         // Test Spanner query and get reply.
         tx_ctrl.send(1).unwrap();
         println!("reply for 1: {}", rx_data.recv().unwrap());
+
+        let mut bo = BackoffBuilder::new().build();
+        thread::sleep(Duration::from_nanos(bo.pause()));
     }
 
     pub fn close(&mut self) {

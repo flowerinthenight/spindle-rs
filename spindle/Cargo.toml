@@ -5,7 +5,5 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1.43.0", features = ["full"] }
-# google-cloud-rust-raw = "=0.15.0"
-# grpcio = "0.12.1"
-# protobuf = "2.28.0"
 google-cloud-spanner = { package="gcloud-spanner", version="1.0.0" }
+exp_backoff = "0.1.2"
