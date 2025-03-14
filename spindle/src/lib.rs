@@ -16,8 +16,8 @@ use tokio::runtime::Runtime;
 #[derive(Debug)]
 struct LockVal {
     pub name: String,
-    pub heartbeat: String,
-    pub token: String,
+    pub heartbeat: i128,
+    pub token: i128,
     pub writer: String,
 }
 
@@ -77,8 +77,8 @@ fn spanner_caller(
                         tx_in
                             .send(LockVal {
                                 name: String::from(""),
-                                heartbeat: String::from(""),
-                                token: t.to_string(),
+                                heartbeat: 0,
+                                token: t.unix_timestamp_nanos(),
                                 writer: w,
                             })
                             .unwrap();
@@ -151,8 +151,7 @@ impl Lock {
 
         // Test Spanner query and get reply.
         tx_ctrl.send(ProtoCtrl::CurrentToken).unwrap();
-        let reply = rx_data.recv().unwrap();
-        match reply {
+        match rx_data.recv().unwrap() {
             ProtoData::CurrentToken(v) => {
                 info!("reply for [CurrentToken]: v={:?}", v);
             }
@@ -162,9 +161,9 @@ impl Lock {
         let mut bo = BackoffBuilder::new().build();
         thread::sleep(Duration::from_nanos(bo.pause()));
 
+        // Test heartbeat update and get reply.
         tx_ctrl.send(ProtoCtrl::Heartbeat).unwrap();
-        let reply = rx_data.recv().unwrap();
-        match reply {
+        match rx_data.recv().unwrap() {
             ProtoData::Heartbeat(v) => {
                 info!("reply for [Heartbeat]: v={:?}", v);
             }
