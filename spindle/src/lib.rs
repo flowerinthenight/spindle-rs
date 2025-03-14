@@ -20,6 +20,12 @@ struct DiffToken {
     token: i128,
 }
 
+#[derive(Debug, Clone)]
+struct HeartbeatMeta {
+    signal_as_reply: bool,
+    signal: Arc<AtomicUsize>,
+}
+
 #[derive(Debug)]
 struct LockVal {
     name: String,
@@ -31,10 +37,10 @@ struct LockVal {
 #[derive(Debug)]
 enum ProtoCtrl {
     Exit,
-    Dummy,
+    Dummy(Arc<AtomicUsize>),
     CheckLock,
     CurrentToken,
-    Heartbeat,
+    Heartbeat(HeartbeatMeta),
 }
 
 #[derive(Debug)]
@@ -70,7 +76,11 @@ fn spanner_caller(
                 rt.block_on(async { client.close().await });
                 return;
             }
-            ProtoCtrl::Dummy => info!("dummy received"),
+            ProtoCtrl::Dummy(v) => {
+                info!("dummy received");
+                let vc = v.clone();
+                vc.fetch_add(1, Ordering::Relaxed);
+            }
             ProtoCtrl::CheckLock => {
                 let start = Instant::now();
                 let (tx_in, rx_in): (Sender<DiffToken>, Receiver<DiffToken>) = mpsc::channel();
@@ -139,7 +149,7 @@ fn spanner_caller(
 
                 info!("ProtoData::CurrentToken took {:?}", start.elapsed());
             }
-            ProtoCtrl::Heartbeat => {
+            ProtoCtrl::Heartbeat(hbmeta) => {
                 let start = Instant::now();
                 let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
                 rt.block_on(async {
@@ -159,16 +169,21 @@ fn spanner_caller(
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
                                 .unwrap();
-                            info!("commit_timestamp={dt}");
+                            info!("heartbeat_timestamp: {dt}");
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
                         }
                         Err(_) => tx_in.send(-1).unwrap(),
                     };
                 });
 
-                tx_data
-                    .send(ProtoData::Heartbeat(rx_in.recv().unwrap()))
-                    .unwrap();
+                if !hbmeta.signal_as_reply {
+                    tx_data
+                        .send(ProtoData::Heartbeat(rx_in.recv().unwrap()))
+                        .unwrap();
+                } else {
+                    let sc = hbmeta.signal.clone();
+                    sc.fetch_add(1, Ordering::Relaxed);
+                }
 
                 info!("ProtoData::Heartbeat took {:?}", start.elapsed());
             }
@@ -209,17 +224,22 @@ impl Lock {
         // Setup the heartbeat thread (leader only). No proper exit here;
         // let the OS do the cleanup upon termination of main thread.
         let ldr_hb = leader.clone();
-        let min = self.duration_ms / 4;
-        let max = (self.duration_ms / 4) * 3;
+        let min = (self.duration_ms / 10) * 5;
+        let max = (self.duration_ms / 10) * 8;
         let tx_ctrl_hb = tx_ctrl.clone();
         let _hb = thread::spawn(move || {
-            info!("min={}, max={}", min, max);
+            info!(
+                "min={:?}, max={:?}",
+                Duration::from_millis(min),
+                Duration::from_millis(max)
+            );
+
             // We don't really care about ns precision here; only for random pause.
             let mut bo = BackoffBuilder::new().initial_ns(min).max_ns(max).build();
-
             loop {
                 match ldr_hb.load(Ordering::Acquire) {
                     1 => {
+                        let start = Instant::now();
                         let mut pause = 0;
                         _ = pause; // warn
                         loop {
@@ -230,15 +250,26 @@ impl Lock {
                             }
                         }
 
-                        match tx_ctrl_hb.send(ProtoCtrl::Dummy) {
-                            Ok(_) => {}
-                            Err(e) => error!("{e}"),
+                        let hbmeta = HeartbeatMeta {
+                            signal_as_reply: true,
+                            signal: Arc::new(AtomicUsize::new(1)),
+                        };
+
+                        match tx_ctrl_hb.send(ProtoCtrl::Heartbeat(hbmeta.clone())) {
+                            Err(e) => error!("ProtoCtrl::Heartbeat failed: {e}"),
+                            Ok(_) => loop {
+                                let nval = hbmeta.signal.load(Ordering::Acquire);
+                                if nval > 1 {
+                                    break;
+                                } else {
+                                    thread::sleep(Duration::from_micros(10));
+                                }
+                            },
                         }
 
-                        info!("final_pause={}", pause);
-                        thread::sleep(Duration::from_millis(pause));
-
-                        // TODO: heartbeat here, we are leader
+                        let pause_t = pause + start.elapsed().as_millis() as u64;
+                        info!("({pause}) pause for {:?}", Duration::from_millis(pause_t));
+                        thread::sleep(Duration::from_millis(pause_t));
                     }
                     _ => thread::sleep(Duration::from_secs(1)),
                 }
@@ -266,7 +297,13 @@ impl Lock {
         }
 
         // Test heartbeat update and get reply.
-        tx_ctrl.send(ProtoCtrl::Heartbeat).unwrap();
+        tx_ctrl
+            .send(ProtoCtrl::Heartbeat(HeartbeatMeta {
+                signal_as_reply: false,
+                signal: Arc::new(AtomicUsize::new(0)),
+            }))
+            .unwrap();
+
         match rx_data.recv().unwrap() {
             ProtoData::Heartbeat(v) => {
                 info!("reply for [Heartbeat]: v={:?}", v);
@@ -276,7 +313,9 @@ impl Lock {
     }
 
     pub fn close(&mut self) {
-        self.exit_tx[0].send(ProtoCtrl::Exit).unwrap(); // exit
+        if let Err(e) = self.exit_tx[0].send(ProtoCtrl::Exit) {
+            error!("ProtoCtrl::Exit failed: {e}");
+        };
     }
 
     pub fn inc(&self) {
