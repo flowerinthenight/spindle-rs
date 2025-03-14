@@ -223,16 +223,20 @@ impl Lock {
 
                         let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
                         match tx_ctrl_hb.send(ProtoCtrl::Heartbeat(tx)) {
-                            Err(e) => error!("ProtoCtrl::Heartbeat failed: {e}"),
+                            Err(e) => error!("Heartbeat failed: {e}"),
                             Ok(_) => match rx.recv() {
-                                Ok(v) => info!("dummy ok: {v}"),
-                                Err(e) => error!("dummy failed: {e}"),
+                                Ok(v) => info!("Hearbeat ok: {v}"),
+                                Err(e) => error!("Hearbeat failed: {e}"),
                             },
                         }
 
-                        let pause_t = pause + start.elapsed().as_millis() as u64;
-                        info!("({pause}) pause for {:?}", Duration::from_millis(pause_t));
-                        thread::sleep(Duration::from_millis(pause_t));
+                        let latency = start.elapsed().as_millis() as u64;
+                        if latency < pause {
+                            pause -= latency;
+                        }
+
+                        info!("pause for {:?}", Duration::from_millis(pause));
+                        thread::sleep(Duration::from_millis(pause));
                     }
                     _ => thread::sleep(Duration::from_secs(1)),
                 }
