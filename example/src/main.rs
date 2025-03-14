@@ -15,15 +15,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .table("testlease".to_string())
         .name("mylock".to_string())
         .id(":8080".to_string())
-        .duration(5000)
+        .duration_ms(5000)
         .build();
 
     lock.inc();
     lock.inc();
-    lock.run();
-    lock.close();
+    lock.inc();
 
-    thread::sleep(Duration::from_secs(2));
+    lock.run();
+
+    lock.inc();
+    lock.inc();
+    lock.inc();
+
+    thread::sleep(Duration::from_secs(30));
+
+    lock.close();
 
     Ok(())
 }
