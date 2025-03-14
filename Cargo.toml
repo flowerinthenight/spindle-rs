@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = [ "example", "scratch","spindle"]
+members = ["example","scratch","spindle"]
