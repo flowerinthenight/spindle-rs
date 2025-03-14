@@ -9,24 +9,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{io, thread};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
-
-#[derive(Debug, Clone)]
-struct HeartbeatMeta {
-    signal_as_reply: bool,
-    signal: Arc<AtomicUsize>,
-}
 
 #[derive(Debug)]
 enum ProtoCtrl {
     Exit,
-    Dummy(Arc<AtomicUsize>),
-    CheckLock,
-    CurrentToken,
-    Heartbeat(HeartbeatMeta),
+    Dummy(Sender<bool>),
+    CheckLock(Sender<DiffToken>),
+    CurrentToken(Sender<LockVal>),
+    Heartbeat(Sender<i128>),
 }
 
 #[derive(Debug)]
@@ -43,13 +37,6 @@ struct LockVal {
     writer: String,
 }
 
-#[derive(Debug)]
-enum ProtoData {
-    CheckLock(DiffToken),
-    CurrentToken(LockVal),
-    Heartbeat(i128),
-}
-
 pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     let (tx, rx) = mpsc::channel();
     rt.block_on(async {
@@ -61,13 +48,7 @@ pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     rx.recv().unwrap()
 }
 
-fn spanner_caller(
-    db: String,
-    table: String,
-    name: String,
-    rx_code: Receiver<ProtoCtrl>,
-    tx_data: Sender<ProtoData>,
-) {
+fn spanner_caller(db: String, table: String, name: String, rx_code: Receiver<ProtoCtrl>) {
     let rt = Runtime::new().unwrap();
     let client = get_spanner_client(&rt, db);
     for code in rx_code {
@@ -76,12 +57,11 @@ fn spanner_caller(
                 rt.block_on(async { client.close().await });
                 return;
             }
-            ProtoCtrl::Dummy(v) => {
+            ProtoCtrl::Dummy(tx) => {
                 info!("dummy received");
-                let vc = v.clone();
-                vc.fetch_add(1, Ordering::Relaxed);
+                tx.send(true).unwrap();
             }
-            ProtoCtrl::CheckLock => {
+            ProtoCtrl::CheckLock(tx) => {
                 let start = Instant::now();
                 let (tx_in, rx_in): (Sender<DiffToken>, Receiver<DiffToken>) = mpsc::channel();
                 rt.block_on(async {
@@ -111,13 +91,10 @@ fn spanner_caller(
                     }
                 });
 
-                tx_data
-                    .send(ProtoData::CheckLock(rx_in.recv().unwrap()))
-                    .unwrap();
-
-                info!("ProtoData::CheckLock took {:?}", start.elapsed());
+                tx.send(rx_in.recv().unwrap()).unwrap();
+                info!("CheckLock took {:?}", start.elapsed());
             }
-            ProtoCtrl::CurrentToken => {
+            ProtoCtrl::CurrentToken(tx) => {
                 let start = Instant::now();
                 let (tx_in, rx_in): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
                 rt.block_on(async {
@@ -143,13 +120,10 @@ fn spanner_caller(
                     }
                 });
 
-                tx_data
-                    .send(ProtoData::CurrentToken(rx_in.recv().unwrap()))
-                    .unwrap();
-
-                info!("ProtoData::CurrentToken took {:?}", start.elapsed());
+                tx.send(rx_in.recv().unwrap()).unwrap();
+                info!("CurrentToken took {:?}", start.elapsed());
             }
-            ProtoCtrl::Heartbeat(hbmeta) => {
+            ProtoCtrl::Heartbeat(tx) => {
                 let start = Instant::now();
                 let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
                 rt.block_on(async {
@@ -176,16 +150,8 @@ fn spanner_caller(
                     };
                 });
 
-                if !hbmeta.signal_as_reply {
-                    tx_data
-                        .send(ProtoData::Heartbeat(rx_in.recv().unwrap()))
-                        .unwrap();
-                } else {
-                    let sc = hbmeta.signal.clone();
-                    sc.fetch_add(1, Ordering::Relaxed);
-                }
-
-                info!("ProtoData::Heartbeat took {:?}", start.elapsed());
+                tx.send(rx_in.recv().unwrap()).unwrap();
+                info!("Heartbeat took {:?}", start.elapsed());
             }
         }
     }
@@ -219,13 +185,12 @@ impl Lock {
 
         // Setup Spanner query thread. Delegate to a separate thread to have
         // a better control over async calls and a tokio runtime.
-        let (tx_data, rx_data): (Sender<ProtoData>, Receiver<ProtoData>) = mpsc::channel();
         let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = mpsc::channel();
         self.exit_tx.push(tx_ctrl.clone());
         let db = self.db.clone();
         let table = self.table.clone();
         let name = self.name.clone();
-        let _thr = thread::spawn(move || spanner_caller(db, table, name, rx_ctrl, tx_data));
+        let _thr = thread::spawn(move || spanner_caller(db, table, name, rx_ctrl));
 
         // Setup the heartbeat thread (leader only). No proper exit here;
         // let the OS do the cleanup upon termination of main thread.
@@ -256,20 +221,12 @@ impl Lock {
                             }
                         }
 
-                        let hbmeta = HeartbeatMeta {
-                            signal_as_reply: true,
-                            signal: Arc::new(AtomicUsize::new(1)),
-                        };
-
-                        match tx_ctrl_hb.send(ProtoCtrl::Heartbeat(hbmeta.clone())) {
+                        let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                        match tx_ctrl_hb.send(ProtoCtrl::Heartbeat(tx)) {
                             Err(e) => error!("ProtoCtrl::Heartbeat failed: {e}"),
-                            Ok(_) => loop {
-                                let nval = hbmeta.signal.load(Ordering::Acquire);
-                                if nval > 1 {
-                                    break;
-                                } else {
-                                    thread::sleep(Duration::from_micros(10));
-                                }
+                            Ok(_) => match rx.recv() {
+                                Ok(v) => info!("dummy ok: {v}"),
+                                Err(e) => error!("dummy failed: {e}"),
                             },
                         }
 
@@ -284,37 +241,24 @@ impl Lock {
 
         leader.store(1, Ordering::Relaxed);
 
-        // Test check lock and get reply.
-        tx_ctrl.send(ProtoCtrl::CheckLock).unwrap();
-        match rx_data.recv().unwrap() {
-            ProtoData::CheckLock(v) => {
-                info!("reply for [CheckLock]: v={:?}", v);
+        {
+            // Test check lock and get reply.
+            let (tx, rx): (Sender<DiffToken>, Receiver<DiffToken>) = mpsc::channel();
+            tx_ctrl.send(ProtoCtrl::CheckLock(tx)).unwrap();
+            match rx.recv() {
+                Ok(v) => info!("CheckLock: {:?}", v),
+                Err(e) => error!("CheckLock failed: {e}"),
             }
-            _ => {}
         }
 
-        // Test query token and get reply.
-        tx_ctrl.send(ProtoCtrl::CurrentToken).unwrap();
-        match rx_data.recv().unwrap() {
-            ProtoData::CurrentToken(v) => {
-                info!("reply for [CurrentToken]: v={:?}", v);
+        {
+            // Test query token and get reply.
+            let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
+            tx_ctrl.send(ProtoCtrl::CurrentToken(tx)).unwrap();
+            match rx.recv() {
+                Ok(v) => info!("CurrentToken: {:?}", v),
+                Err(e) => error!("CurrentToken failed: {e}"),
             }
-            _ => {}
-        }
-
-        // Test heartbeat update and get reply.
-        tx_ctrl
-            .send(ProtoCtrl::Heartbeat(HeartbeatMeta {
-                signal_as_reply: false,
-                signal: Arc::new(AtomicUsize::new(0)),
-            }))
-            .unwrap();
-
-        match rx_data.recv().unwrap() {
-            ProtoData::Heartbeat(v) => {
-                info!("reply for [Heartbeat]: v={:?}", v);
-            }
-            _ => {}
         }
     }
 
