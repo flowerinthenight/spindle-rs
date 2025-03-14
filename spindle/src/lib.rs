@@ -2,13 +2,35 @@ use exp_backoff::BackoffBuilder;
 use google_cloud_spanner::client::Client;
 use google_cloud_spanner::client::ClientConfig;
 use google_cloud_spanner::statement::Statement;
+use google_cloud_spanner::value::CommitTimestamp;
+use log::*;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io, thread};
 use tokio::runtime::Runtime;
+
+#[derive(Debug)]
+struct LockVal {
+    pub name: String,
+    pub heartbeat: String,
+    pub token: String,
+    pub writer: String,
+}
+
+#[derive(Debug)]
+enum ProtoCtrl {
+    Exit,
+    CurrentToken,
+}
+
+#[derive(Debug)]
+enum ProtoData {
+    CurrentToken(LockVal),
+}
 
 pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     let (tx, rx) = mpsc::channel();
@@ -21,42 +43,55 @@ pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     rx.recv().unwrap()
 }
 
-fn spanner_caller(db: String, rx_code: Receiver<i32>, tx_data: Sender<i32>) {
+fn spanner_caller(
+    db: String,
+    table: String,
+    name: String,
+    rx_code: Receiver<ProtoCtrl>,
+    tx_data: Sender<ProtoData>,
+) {
     let rt = Runtime::new().unwrap();
     let client = get_spanner_client(&rt, db);
     for code in rx_code {
         match code {
-            0 => {
-                println!("exit");
+            ProtoCtrl::Exit => {
                 rt.block_on(async { client.close().await });
                 return;
             }
-            1 => {
+            ProtoCtrl::CurrentToken => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
                 rt.block_on(async {
-                    let mut stmt = Statement::new("select mask from mask_id where name = @name");
-                    stmt.add_param("name", &"000000009586");
+                    let mut s = String::new();
+                    write!(&mut s, "select token, writer from {} ", table).unwrap();
+                    write!(&mut s, "where name = @name").unwrap();
+                    let mut stmt = Statement::new(s);
+                    stmt.add_param("name", &name);
                     let mut tx = client.single().await.unwrap();
                     let mut iter = tx.query(stmt).await.unwrap();
                     while let Some(row) = iter.next().await.unwrap() {
-                        let m = row.column_by_name::<String>("mask");
-                        println!("mask={:?}", m)
+                        let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
+                        let w = row.column_by_name::<String>("writer").unwrap();
+                        tx_in
+                            .send(LockVal {
+                                name: "".to_string(),
+                                heartbeat: "".to_string(),
+                                token: t.to_string(),
+                                writer: w,
+                            })
+                            .unwrap();
+                        break; // ensure single line
                     }
                 });
 
-                tx_data.send(100).unwrap();
-            }
-            _ => {
-                println!("unsupported code: {}", code);
+                tx_data
+                    .send(ProtoData::CurrentToken(rx_in.recv().unwrap()))
+                    .unwrap();
+
+                info!("'CurrentToken' took {:?}", start.elapsed());
             }
         }
     }
-}
-
-struct LockVal {
-    pub name: String,
-    pub heartbeat: String,
-    pub token: String,
-    pub writer: String,
 }
 
 pub struct Lock {
@@ -64,9 +99,9 @@ pub struct Lock {
     table: String,
     name: String,
     id: String,
-    timeout: u64,
+    duration: u64,
     active: Arc<AtomicUsize>,
-    exit_tx: Vec<Sender<i32>>,
+    exit_tx: Vec<Sender<ProtoCtrl>>,
 }
 
 impl Lock {
@@ -75,33 +110,40 @@ impl Lock {
     }
 
     pub fn run(&mut self) {
-        println!("table={}, name={}, id={}", self.table, self.name, self.id);
+        info!("table={}, name={}, id={}", self.table, self.name, self.id);
 
         // Setup Spanner query thread. Delegate to a separate thread to have
         // a better control over async calls and a tokio runtime.
-        let (tx_data, rx_data): (Sender<i32>, Receiver<i32>) = mpsc::channel();
-        let (tx_ctrl, rx_ctrl): (Sender<i32>, Receiver<i32>) = mpsc::channel();
+        let (tx_data, rx_data): (Sender<ProtoData>, Receiver<ProtoData>) = mpsc::channel();
+        let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = mpsc::channel();
         self.exit_tx.push(tx_ctrl.clone());
         let db = self.db.clone();
-        let _thr = thread::spawn(move || spanner_caller(db, rx_ctrl, tx_data));
+        let table = self.table.clone();
+        let name = self.name.clone();
+        let _thr = thread::spawn(move || spanner_caller(db, table, name, rx_ctrl, tx_data));
 
         // Test Spanner query and get reply.
-        tx_ctrl.send(1).unwrap();
-        println!("reply for 1: {}", rx_data.recv().unwrap());
+        tx_ctrl.send(ProtoCtrl::CurrentToken).unwrap();
+        let reply = rx_data.recv().unwrap();
+        match reply {
+            ProtoData::CurrentToken(v) => {
+                info!("reply for 'CurrentToken': v={:?}", v);
+            }
+        }
 
         let mut bo = BackoffBuilder::new().build();
         thread::sleep(Duration::from_nanos(bo.pause()));
     }
 
     pub fn close(&mut self) {
-        self.exit_tx[0].send(0).unwrap(); // exit
+        self.exit_tx[0].send(ProtoCtrl::Exit).unwrap(); // exit
     }
 
     pub fn inc(&self) {
         let v = Arc::clone(&self.active);
-        println!("atomic={}", v.fetch_add(1, Ordering::Relaxed));
-        // println!("timeout={}", &self.timeout.unwrap_or(5000));
-        println!("timeout={}", self.timeout);
+        info!("atomic={}", v.fetch_add(1, Ordering::Relaxed));
+        // info!("timeout={}", &self.timeout.unwrap_or(5000));
+        info!("duration={}", self.duration);
     }
 }
 
@@ -111,7 +153,7 @@ pub struct LockBuilder {
     table: String,
     name: String,
     id: String,
-    timeout: u64,
+    duration: u64,
 }
 
 impl LockBuilder {
@@ -139,8 +181,8 @@ impl LockBuilder {
         self
     }
 
-    pub fn timeout(mut self, timeout: u64) -> LockBuilder {
-        self.timeout = timeout;
+    pub fn duration(mut self, duration: u64) -> LockBuilder {
+        self.duration = duration;
         self
     }
 
@@ -150,7 +192,7 @@ impl LockBuilder {
             table: self.table,
             name: self.name,
             id: self.id,
-            timeout: self.timeout,
+            duration: self.duration,
             active: Arc::new(AtomicUsize::new(0)),
             exit_tx: vec![],
         }

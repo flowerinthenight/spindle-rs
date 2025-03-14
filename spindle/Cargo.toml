@@ -7,3 +7,4 @@ edition = "2024"
 tokio = { version = "1.43.0", features = ["full"] }
 google-cloud-spanner = { package="gcloud-spanner", version="1.0.0" }
 exp_backoff = "0.1.2"
+log = "0.4.26"
