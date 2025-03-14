@@ -25,11 +25,13 @@ struct LockVal {
 enum ProtoCtrl {
     Exit,
     CurrentToken,
+    Heartbeat,
 }
 
 #[derive(Debug)]
 enum ProtoData {
     CurrentToken(LockVal),
+    Heartbeat(i32),
 }
 
 pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
@@ -62,10 +64,10 @@ fn spanner_caller(
                 let start = Instant::now();
                 let (tx_in, rx_in): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
                 rt.block_on(async {
-                    let mut s = String::new();
-                    write!(&mut s, "select token, writer from {} ", table).unwrap();
-                    write!(&mut s, "where name = @name").unwrap();
-                    let mut stmt = Statement::new(s);
+                    let mut q = String::new();
+                    write!(&mut q, "select token, writer from {} ", table).unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt = Statement::new(q);
                     stmt.add_param("name", &name);
                     let mut tx = client.single().await.unwrap();
                     let mut iter = tx.query(stmt).await.unwrap();
@@ -74,8 +76,8 @@ fn spanner_caller(
                         let w = row.column_by_name::<String>("writer").unwrap();
                         tx_in
                             .send(LockVal {
-                                name: "".to_string(),
-                                heartbeat: "".to_string(),
+                                name: String::from(""),
+                                heartbeat: String::from(""),
                                 token: t.to_string(),
                                 writer: w,
                             })
@@ -88,7 +90,32 @@ fn spanner_caller(
                     .send(ProtoData::CurrentToken(rx_in.recv().unwrap()))
                     .unwrap();
 
-                info!("'CurrentToken' took {:?}", start.elapsed());
+                debug!("ProtoData::CurrentToken took {:?}", start.elapsed());
+            }
+            ProtoCtrl::Heartbeat => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i32>, Receiver<i32>) = mpsc::channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "update {} ", table).unwrap();
+                    write!(&mut q, "set heartbeat = PENDING_COMMIT_TIMESTAMP() ").unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt = Statement::new(q);
+                    stmt.add_param("name", &name);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res_up = tx.update(stmt).await;
+                    let res_end = tx.end(res_up, None).await;
+                    match res_end {
+                        Ok(_) => tx_in.send(0).unwrap(),
+                        Err(_) => tx_in.send(1).unwrap(),
+                    }
+                });
+
+                tx_data
+                    .send(ProtoData::Heartbeat(rx_in.recv().unwrap()))
+                    .unwrap();
+
+                info!("ProtoData::Heartbeat took {:?}", start.elapsed());
             }
         }
     }
@@ -127,12 +154,22 @@ impl Lock {
         let reply = rx_data.recv().unwrap();
         match reply {
             ProtoData::CurrentToken(v) => {
-                info!("reply for 'CurrentToken': v={:?}", v);
+                info!("reply for [CurrentToken]: v={:?}", v);
             }
+            _ => {}
         }
 
         let mut bo = BackoffBuilder::new().build();
         thread::sleep(Duration::from_nanos(bo.pause()));
+
+        tx_ctrl.send(ProtoCtrl::Heartbeat).unwrap();
+        let reply = rx_data.recv().unwrap();
+        match reply {
+            ProtoData::Heartbeat(v) => {
+                info!("reply for [Heartbeat]: v={:?}", v);
+            }
+            _ => {}
+        }
     }
 
     pub fn close(&mut self) {
