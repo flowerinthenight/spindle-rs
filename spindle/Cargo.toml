@@ -9,6 +9,5 @@ google-cloud-spanner = { package="gcloud-spanner", version="1.0.0" }
 exp_backoff = "0.1.4"
 log = "0.4.26"
 time = "0.3.39"
-xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 scopeguard = "1.2.0"
 uuid = { version = "1.16.0", features = ["v4"] }

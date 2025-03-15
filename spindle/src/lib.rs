@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
-use xxhash_rust::xxh3::xxh3_64;
 
 #[macro_use(defer)]
 extern crate scopeguard;
@@ -114,7 +113,7 @@ fn spanner_caller(
                     token: rx_in.recv().unwrap(),
                     writer: String::from(""),
                 }) {
-                    error!("{e}")
+                    error!("InitialLock reply failed: {e}")
                 }
 
                 info!("InitialLock took {:?}", start.elapsed());
@@ -139,6 +138,7 @@ fn spanner_caller(
                     stmt.add_param("name", &name);
                     let mut tx = client.single().await.unwrap();
                     let mut iter = tx.query(stmt).await.unwrap();
+                    let mut empty = true;
                     while let Some(row) = iter.next().await.unwrap() {
                         let d = row.column_by_name::<i64>("diff").unwrap();
                         let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
@@ -148,15 +148,21 @@ fn spanner_caller(
                                 token: t.unix_timestamp_nanos(),
                             })
                             .unwrap();
+
+                        empty = false;
                         break; // ensure single line
+                    }
+
+                    if empty {
+                        tx_in.send(DiffToken { diff: 0, token: -1 }).unwrap();
                     }
                 });
 
                 if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("{e}")
+                    error!("CheckLock reply failed: {e}")
                 }
 
-                info!("CheckLock took {:?}", start.elapsed());
+                debug!("CheckLock took {:?}", start.elapsed());
             }
             ProtoCtrl::CurrentToken(tx) => {
                 let start = Instant::now();
@@ -169,6 +175,7 @@ fn spanner_caller(
                     stmt.add_param("name", &name);
                     let mut tx = client.single().await.unwrap();
                     let mut iter = tx.query(stmt).await.unwrap();
+                    let mut empty = true;
                     while let Some(row) = iter.next().await.unwrap() {
                         let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
                         let w = row.column_by_name::<String>("writer").unwrap();
@@ -180,12 +187,25 @@ fn spanner_caller(
                                 writer: w,
                             })
                             .unwrap();
+
+                        empty = false;
                         break; // ensure single line
+                    }
+
+                    if empty {
+                        tx_in
+                            .send(LockVal {
+                                name: String::from(""),
+                                heartbeat: 0,
+                                token: 0,
+                                writer: String::from(""),
+                            })
+                            .unwrap();
                     }
                 });
 
                 if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("{e}")
+                    error!("CurrentToken reply failed: {e}")
                 }
 
                 info!("CurrentToken took {:?}", start.elapsed());
@@ -210,7 +230,7 @@ fn spanner_caller(
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
                                 .unwrap();
-                            info!("Heartbeat commit timestamp: {dt}");
+                            debug!("Heartbeat commit timestamp: {dt}");
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
                         }
                         Err(_) => tx_in.send(-1).unwrap(),
@@ -218,10 +238,10 @@ fn spanner_caller(
                 });
 
                 if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("{e}")
+                    error!("Heartbeat reply failed: {e}")
                 }
 
-                info!("Heartbeat took {:?}", start.elapsed());
+                debug!("Heartbeat took {:?}", start.elapsed());
             }
         }
     }
@@ -280,61 +300,35 @@ impl Lock {
             // We don't really care about ns precision here; only for random pause.
             let mut bo = BackoffBuilder::new().initial_ns(min).max_ns(max).build();
             loop {
-                match ldr_hb.load(Ordering::Acquire) {
-                    1 => {
-                        let start = Instant::now();
-                        let mut pause = 0;
-                        _ = pause; // warn
-                        loop {
-                            let tmp = bo.pause();
-                            if tmp >= min {
-                                pause = tmp;
-                                break;
-                            }
+                if ldr_hb.load(Ordering::Acquire) > 0 {
+                    let start = Instant::now();
+                    let mut pause = 0;
+                    _ = pause; // warn
+                    loop {
+                        let tmp = bo.pause();
+                        if tmp >= min {
+                            pause = tmp;
+                            break;
                         }
-
-                        let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
-                        match tx_ctrl_hb.send(ProtoCtrl::Heartbeat(tx)) {
-                            Err(e) => error!("Heartbeat failed: {e}"),
-                            Ok(_) => match rx.recv() {
-                                Ok(v) => {
-                                    info!("Hearbeat ok: {v}");
-                                }
-                                Err(e) => error!("Hearbeat failed: {e}"),
-                            },
-                        }
-
-                        let latency = start.elapsed().as_millis() as u64;
-                        if latency < pause {
-                            pause -= latency;
-                        }
-
-                        info!("pause for {:?}", Duration::from_millis(pause));
-                        thread::sleep(Duration::from_millis(pause));
                     }
-                    _ => thread::sleep(Duration::from_secs(1)),
+
+                    let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                    if let Ok(_) = tx_ctrl_hb.send(ProtoCtrl::Heartbeat(tx)) {
+                        if let Err(_) = rx.recv() {} // ignore
+                    }
+
+                    let latency = start.elapsed().as_millis() as u64;
+                    if latency < pause {
+                        pause -= latency;
+                    }
+
+                    info!("pause for {:?}", Duration::from_millis(pause));
+                    thread::sleep(Duration::from_millis(pause));
+                } else {
+                    thread::sleep(Duration::from_secs(1));
                 }
             }
         });
-
-        // NOTE: Remove, test only.
-        // leader.store(1, Ordering::Relaxed);
-
-        {
-            // Test query token and get reply.
-            let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
-            tx_ctrl.send(ProtoCtrl::CurrentToken(tx)).unwrap();
-            match rx.recv() {
-                Ok(v) => {
-                    info!("CurrentToken: {:?}", v);
-                    let mut st = String::new();
-                    write!(&mut st, "{}", v.token).unwrap();
-                    let token = xxh3_64(st.as_bytes());
-                    info!("hashed token: {}", token);
-                }
-                Err(e) => error!("CurrentToken failed: {e}"),
-            }
-        }
 
         let tx_ctrl_main = tx_ctrl.clone();
         let duration_ms = self.duration_ms;
@@ -345,6 +339,7 @@ impl Lock {
             loop {
                 round += 1;
                 let start = Instant::now();
+                info!("---");
 
                 defer! {
                     info!("round {} took {:?}", round, start.elapsed());
@@ -358,22 +353,22 @@ impl Lock {
                 }
 
                 let mut locked = false;
-
                 match rx.recv() {
                     Ok(v) => {
-                        'b: loop {
-                            info!("CheckLock: {:?}", v);
-
+                        'single: loop {
                             // We are leader now.
                             if token.load(Ordering::Acquire) == v.token as u64 {
                                 leader.fetch_add(1, Ordering::Relaxed);
                                 if leader.load(Ordering::Acquire) == 1 {
-                                    // TODO: Do heartbeat here.
+                                    let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                                    if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::Heartbeat(tx)) {
+                                        if let Err(_) = rx.recv() {} // ignore
+                                    }
                                 }
 
                                 info!("leader active (me)");
                                 locked = true;
-                                break 'b;
+                                break 'single;
                             }
 
                             // We're not leader now.
@@ -398,11 +393,11 @@ impl Lock {
                                     info!("leader active (not me)");
                                     leader.store(0, Ordering::Relaxed); // reset heartbeat
                                     locked = true;
-                                    break 'b;
+                                    break 'single;
                                 }
                             }
 
-                            break 'b;
+                            break 'single;
                         }
                     }
                     Err(_) => continue,
@@ -412,15 +407,16 @@ impl Lock {
                     continue;
                 }
 
+                // Attempt first ever lock. The return commit timestamp will be our fencing
+                // token. Only one node should be able to do this successfully.
                 if initial {
                     initial = false;
                     let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
                     if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::InitialLock(tx)) {
                         if let Ok(v) = rx.recv() {
-                            if v.token < 0 {
-                                info!("InitialLock failed: {}", v.token);
-                            } else {
-                                info!("InitialLock: {}", v.token);
+                            if v.token > -1 {
+                                token.store(v.token as u64, Ordering::Relaxed);
+                                info!("init: got the lock with token {}", v.token);
                             }
                         }
                     }
