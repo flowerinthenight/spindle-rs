@@ -37,8 +37,9 @@ struct LockVal {
 enum ProtoCtrl {
     Exit,
     Dummy(Sender<bool>),
-    InitialLock(Sender<LockVal>),
-    NextLock(Sender<bool>),
+    InitialLock(Sender<i128>),
+    NextLockInsert { name: String, tx: Sender<i128> },
+    NextLockUpdate { token: i128, tx: Sender<i128> },
     CheckLock(Sender<DiffToken>),
     CurrentToken(Sender<LockVal>),
     Heartbeat(Sender<i128>),
@@ -55,13 +56,7 @@ pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     rx.recv().unwrap()
 }
 
-fn spanner_caller(
-    db: String,
-    table: String,
-    name: String,
-    id: String,
-    rx_ctrl: Receiver<ProtoCtrl>,
-) {
+fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: Receiver<ProtoCtrl>) {
     let rt = Runtime::new().unwrap();
     let client = get_spanner_client(&rt, db);
     for code in rx_ctrl {
@@ -101,25 +96,99 @@ fn spanner_caller(
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
                         }
                         Err(e) => {
-                            error!("{e}");
+                            error!("InitialLock DML failed: {e}");
                             tx_in.send(-1).unwrap();
                         }
                     };
                 });
 
-                if let Err(e) = tx.send(LockVal {
-                    name: String::from(""),
-                    heartbeat: 0,
-                    token: rx_in.recv().unwrap(),
-                    writer: String::from(""),
-                }) {
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
                     error!("InitialLock reply failed: {e}")
                 }
 
                 info!("InitialLock took {:?}", start.elapsed());
             }
-            ProtoCtrl::NextLock(tx) => {
-                tx.send(true).unwrap();
+            ProtoCtrl::NextLockInsert { name, tx } => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "insert {} ", table).unwrap();
+                    write!(&mut q, "(name) ").unwrap();
+                    write!(&mut q, "values ('{}')", name).unwrap();
+                    let stmt = Statement::new(q);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res = tx.update(stmt).await;
+                    let res = tx.end(res, None).await;
+                    match res {
+                        Ok(s) => {
+                            let ts = s.0.unwrap();
+                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
+                                .unwrap()
+                                .replace_nanosecond(ts.nanos as u32)
+                                .unwrap();
+                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
+                        }
+                        Err(e) => {
+                            error!("NextLockInsert DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
+                    };
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("NextLockInsert reply failed: {e}")
+                }
+
+                debug!("NextLockInsert took {:?}", start.elapsed());
+            }
+            ProtoCtrl::NextLockUpdate { token, tx } => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "update {} set ", table).unwrap();
+                    write!(&mut q, "heartbeat = PENDING_COMMIT_TIMESTAMP(), ").unwrap();
+                    write!(&mut q, "token = @token, ").unwrap();
+                    write!(&mut q, "writer = @writer ").unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt1 = Statement::new(q);
+                    let odt = OffsetDateTime::from_unix_timestamp_nanos(token).unwrap();
+                    stmt1.add_param("token", &odt);
+                    stmt1.add_param("writer", &id);
+                    stmt1.add_param("name", &name);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res = tx.update(stmt1).await;
+
+                    // Best-effort cleanup.
+                    let mut q = String::new();
+                    write!(&mut q, "delete from {} ", table).unwrap();
+                    write!(&mut q, "where starts_with(name, '{}_')", name).unwrap();
+                    let stmt2 = Statement::new(q);
+                    let _ = tx.update(stmt2).await;
+
+                    let res = tx.end(res, None).await;
+                    match res {
+                        Ok(s) => {
+                            let ts = s.0.unwrap();
+                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
+                                .unwrap()
+                                .replace_nanosecond(ts.nanos as u32)
+                                .unwrap();
+                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
+                        }
+                        Err(e) => {
+                            error!("NextLockUpdate DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
+                    };
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("NextLockUpdate reply failed: {e}")
+                }
+
+                debug!("NextLockUpdate took {:?}", start.elapsed());
             }
             ProtoCtrl::CheckLock(tx) => {
                 let start = Instant::now();
@@ -196,8 +265,8 @@ fn spanner_caller(
                         tx_in
                             .send(LockVal {
                                 name: String::from(""),
-                                heartbeat: 0,
-                                token: 0,
+                                heartbeat: -1,
+                                token: -1,
                                 writer: String::from(""),
                             })
                             .unwrap();
@@ -292,7 +361,7 @@ impl Lock {
         let tx_ctrl_hb = tx_ctrl.clone();
         thread::spawn(move || {
             info!(
-                "min={:?}, max={:?}",
+                "start heartbeat thread: min={:?}, max={:?}",
                 Duration::from_millis(min),
                 Duration::from_millis(max)
             );
@@ -333,13 +402,14 @@ impl Lock {
         let tx_ctrl_main = tx_ctrl.clone();
         let duration_ms = self.duration_ms;
         let token = self.token.clone();
+        let lock_name = self.name.clone();
         thread::spawn(move || {
             let mut round: u64 = 0;
             let mut initial = true;
             loop {
                 round += 1;
                 let start = Instant::now();
-                info!("---");
+                info!("");
 
                 defer! {
                     info!("round {} took {:?}", round, start.elapsed());
@@ -384,9 +454,7 @@ impl Lock {
                                     // new leader for now.
                                     let ovr = diff - duration_ms;
                                     alive = ovr <= 1000; // allow 1s drift
-                                    info!(
-                                        "diff > duration, diff={diff}, duration={duration_ms}, ovr={ovr}"
-                                    );
+                                    info!("diff > duration, diff={diff}, duration={duration_ms}, ovr={ovr}");
                                 }
 
                                 if alive {
@@ -411,18 +479,50 @@ impl Lock {
                 // token. Only one node should be able to do this successfully.
                 if initial {
                     initial = false;
-                    let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
+                    let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
                     if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::InitialLock(tx)) {
-                        if let Ok(v) = rx.recv() {
-                            if v.token > -1 {
-                                token.store(v.token as u64, Ordering::Relaxed);
-                                info!("init: got the lock with token {}", v.token);
+                        if let Ok(t) = rx.recv() {
+                            if t > -1 {
+                                token.store(t as u64, Ordering::Relaxed);
+                                info!("init: got the lock with token {}", t);
                             }
                         }
                     }
                 } else {
-                    info!("next");
-                    token.load(Ordering::Acquire);
+                    let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
+                    if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::CurrentToken(tx)) {
+                        if let Ok(v) = rx.recv() {
+                            if v.token < 0 {
+                                continue;
+                            }
+
+                            let mut update = false;
+                            let mut token_up: i128 = 0;
+                            let mut name = String::new();
+                            write!(&mut name, "{}_{}", lock_name, v.token).unwrap();
+                            let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                            if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::NextLockInsert { name, tx }) {
+                                if let Ok(t) = rx.recv() {
+                                    if t > 0 {
+                                        update = true;
+                                        token_up = t;
+                                    }
+                                }
+                            }
+
+                            if update {
+                                let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                                if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
+                                    if let Ok(t) = rx.recv() {
+                                        if t > 0 {
+                                            token.store(token_up as u64, Ordering::Relaxed);
+                                            info!("next: got the lock with token {}", token_up);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         });

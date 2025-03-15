@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     lock.run();
 
-    thread::sleep(Duration::from_secs(20));
+    thread::sleep(Duration::from_secs(30));
 
     lock.close();
 
