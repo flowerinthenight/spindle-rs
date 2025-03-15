@@ -64,6 +64,10 @@ fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     rx.recv().unwrap()
 }
 
+// This will be running on a separate thread. Caller thread will be requesting Spanner async calls
+// here through ProtoCtrl commands using channels for exchanging information. This is an easier
+// approach for allowing our main threads to have access to async function calls. Here, a single
+// tokio runtime is being used to block on these async calls.
 fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: Receiver<ProtoCtrl>) {
     let rt = Runtime::new().unwrap();
     let client = get_spanner_client(&rt, db);
@@ -337,6 +341,7 @@ pub struct Lock {
 }
 
 impl Lock {
+    /// Allows for discovery of the builder.
     pub fn builder() -> LockBuilder {
         LockBuilder::default()
     }
@@ -344,7 +349,7 @@ impl Lock {
     /// Starts the main lock loop. This function doesn't block.
     pub fn run(&mut self) {
         info!(
-            "run: table={}, name={}, id={}, duration={:?}",
+            "start run: table={}, name={}, id={}, duration={:?}",
             self.table,
             self.name,
             self.id,
