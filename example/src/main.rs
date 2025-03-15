@@ -18,15 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .duration_ms(5000)
         .build();
 
-    lock.inc();
-    lock.inc();
-    lock.inc();
-
     lock.run();
-
-    lock.inc();
-    lock.inc();
-    lock.inc();
 
     thread::sleep(Duration::from_secs(30));
 
