@@ -7,7 +7,7 @@
 This crate implements distributed locking using [Cloud Spanner](https://cloud.google.com/spanner/). It relies on Spanner's [TrueTime](https://cloud.google.com/spanner/docs/true-time-external-consistency) and [transactions](https://cloud.google.com/spanner/docs/transactions) support to achieve its locking mechanism. It's a port of [spindle](https://github.com/flowerinthenight/spindle).
 
 ## Use cases
-One use case for this library is [leader election](https://en.wikipedia.org/wiki/Leader_election). If you want one host/node/pod to be the leader within a cluster/group, you can achieve that with this library. When the leader fails, it will fail over to another host/node/pod within a specific timeout.
+One use case for this library is [leader election](https://en.wikipedia.org/wiki/Leader_election). If you want one host/node/pod to be the leader within a cluster/group, you can achieve that with this crate. When the leader fails, it will fail over to another host/node/pod within a specific timeout.
 
 ## Usage
 At the moment, the table needs to be created beforehand using the following DDL (`locktable` is just an example):
@@ -20,7 +20,7 @@ CREATE TABLE locktable (
 ) PRIMARY KEY (name)
 ```
 
-After creating the lock object, you will call the `run(...)` function which will attempt to acquire a named lock at a regular interval (lease duration). A `has_lock()` function is provided which returns true (along with the lock token) if the lock is successfully acquired. Something like:
+After creating the lock object, you will call the `run()` function which will attempt to acquire a named lock at a regular interval (lease duration). A `has_lock()` function is provided which returns true (along with the lock token) if the lock is successfully acquired. Something like:
 
 ```rust
 use spindle_rs::*;
