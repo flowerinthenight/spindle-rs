@@ -25,12 +25,11 @@ use spindle::*;
 ...
 
 fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
     let (tx, rx) = channel();
     ctrlc::set_handler(move || tx.send(()).unwrap()).unwrap();
     let mut lock = LockBuilder::new()
         .db("projects/p/instances/i/databases/db".to_string())
-        .table("locktable".to_string()) // see above
+        .table("locktable".to_string()) // see CREATE TABLE
         .name("spindle-rs".to_string())
         // .id(":8080".to_string())
         .duration_ms(5000)
@@ -41,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Wait for a bit before calling has_lock().
     thread::sleep(Duration::from_secs(10));
     let (locked, node, token) = lock.has_lock();
-    info!("has_lock: {locked}, {node}, {token}");
+    println!("has_lock: {locked}, {node}, {token}");
 
     // Wait for Ctrl-C.
     rx.recv().unwrap();
