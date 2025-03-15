@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
+use uuid::Uuid;
 use xxhash_rust::xxh3::xxh3_64;
 
 #[macro_use(defer)]
@@ -356,21 +357,59 @@ impl Lock {
                     continue;
                 }
 
+                let mut locked = false;
+
                 match rx.recv() {
                     Ok(v) => {
-                        info!("CheckLock: {:?}", v);
+                        'b: loop {
+                            info!("CheckLock: {:?}", v);
 
-                        // We are leader now.
-                        if token.load(Ordering::Acquire) == v.token as u64 {
-                            leader.fetch_add(1, Ordering::Relaxed);
-                            info!("leader active (me)");
-                        }
+                            // We are leader now.
+                            if token.load(Ordering::Acquire) == v.token as u64 {
+                                leader.fetch_add(1, Ordering::Relaxed);
+                                if leader.load(Ordering::Acquire) == 1 {
+                                    // TODO: Do heartbeat here.
+                                }
 
-                        if v.diff > 0 {
-                            info!("leader active (not me)");
+                                info!("leader active (me)");
+                                locked = true;
+                                break 'b;
+                            }
+
+                            // We're not leader now.
+                            if v.diff > 0 {
+                                let mut alive: bool = false;
+                                let diff = v.diff as u64;
+                                if diff <= duration_ms {
+                                    info!("diff <= duration, diff={diff}, duration={duration_ms}");
+                                    alive = true;
+                                } else if diff > duration_ms {
+                                    // Sometimes, its going to go beyond duration+drift, even
+                                    // in normal situations. In that case, we will allow a
+                                    // new leader for now.
+                                    let ovr = diff - duration_ms;
+                                    alive = ovr <= 1000; // allow 1s drift
+                                    info!(
+                                        "diff > duration, diff={diff}, duration={duration_ms}, ovr={ovr}"
+                                    );
+                                }
+
+                                if alive {
+                                    info!("leader active (not me)");
+                                    leader.store(0, Ordering::Relaxed); // reset heartbeat
+                                    locked = true;
+                                    break 'b;
+                                }
+                            }
+
+                            break 'b;
                         }
                     }
                     Err(_) => continue,
+                }
+
+                if locked {
+                    continue;
                 }
 
                 if initial {
@@ -448,7 +487,12 @@ impl LockBuilder {
             db: self.db,
             table: self.table,
             name: self.name,
-            id: self.id,
+            id: if self.id != "" {
+                self.id
+            } else {
+                let id = Uuid::new_v4();
+                id.to_string()
+            },
             duration_ms: self.duration_ms,
             active: Arc::new(AtomicUsize::new(0)),
             token: Arc::new(AtomicU64::new(0)),

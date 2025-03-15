@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
         .table("testlease".to_string())
         .name("mylock".to_string())
-        .id(":8080".to_string())
+        // .id(":8080".to_string())
         .duration_ms(5000)
         .build();
 
