@@ -2,13 +2,13 @@ use ctrlc;
 use log::info;
 use spindle::*;
 use std::error::Error;
-use std::sync::mpsc;
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = channel();
     ctrlc::set_handler(move || tx.send(()).unwrap()).unwrap();
     let mut lock = LockBuilder::new()
         .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())

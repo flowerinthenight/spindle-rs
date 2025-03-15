@@ -8,8 +8,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
@@ -46,7 +45,7 @@ enum ProtoCtrl {
 }
 
 pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = channel();
     rt.block_on(async {
         let config = ClientConfig::default().with_auth().await.unwrap();
         let client = Client::new(db, config).await.unwrap();
@@ -71,7 +70,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::InitialLock(tx) => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "insert {} ", table).unwrap();
@@ -110,7 +109,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::NextLockInsert { name, tx } => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "insert {} ", table).unwrap();
@@ -144,7 +143,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::NextLockUpdate { token, tx } => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "update {} set ", table).unwrap();
@@ -192,7 +191,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::CheckLock(tx) => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<DiffToken>, Receiver<DiffToken>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<DiffToken>, Receiver<DiffToken>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "select ",).unwrap();
@@ -235,7 +234,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::CurrentToken(tx) => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<Record>, Receiver<Record>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<Record>, Receiver<Record>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "select token, writer from {} ", table).unwrap();
@@ -281,7 +280,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::Heartbeat(tx) => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "update {} ", table).unwrap();
@@ -345,7 +344,7 @@ impl Lock {
 
         // Setup Spanner query thread. Delegate to a separate thread to have
         // a better control over async calls and a tokio runtime.
-        let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = mpsc::channel();
+        let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = channel();
         self.exit_tx.push(tx_ctrl.clone());
         let db = self.db.clone();
         let table = self.table.clone();
@@ -358,7 +357,7 @@ impl Lock {
         let ldr_hb = leader.clone();
         let min = (self.duration_ms / 10) * 5;
         let max = (self.duration_ms / 10) * 8;
-        let tx_ctrl_hb = tx_ctrl.clone();
+        let tx_hb = tx_ctrl.clone();
         thread::spawn(move || {
             info!(
                 "start heartbeat thread: min={:?}, max={:?}",
@@ -382,8 +381,8 @@ impl Lock {
                         }
                     }
 
-                    let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
-                    if let Ok(_) = tx_ctrl_hb.send(ProtoCtrl::Heartbeat(tx)) {
+                    let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                    if let Ok(_) = tx_hb.send(ProtoCtrl::Heartbeat(tx)) {
                         if let Err(_) = rx.recv() {} // ignore
                     }
 
@@ -403,7 +402,7 @@ impl Lock {
 
         // Setup the main thread that drives the lock forward. No proper exit here;
         // let the OS do the cleanup upon termination of the main thread.
-        let tx_ctrl_main = tx_ctrl.clone();
+        let tx_main = tx_ctrl.clone();
         let duration_ms = self.duration_ms;
         let token = self.token.clone();
         let lock_name = self.name.clone();
@@ -421,8 +420,8 @@ impl Lock {
                 }
 
                 // First, see if already locked (could be us or somebody else).
-                let (tx, rx): (Sender<DiffToken>, Receiver<DiffToken>) = mpsc::channel();
-                if let Err(_) = tx_ctrl_main.send(ProtoCtrl::CheckLock(tx)) {
+                let (tx, rx): (Sender<DiffToken>, Receiver<DiffToken>) = channel();
+                if let Err(_) = tx_main.send(ProtoCtrl::CheckLock(tx)) {
                     continue;
                 }
 
@@ -434,8 +433,8 @@ impl Lock {
                             if token.load(Ordering::Acquire) == v.token as u64 {
                                 leader.fetch_add(1, Ordering::Relaxed);
                                 if leader.load(Ordering::Acquire) == 1 {
-                                    let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
-                                    if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::Heartbeat(tx)) {
+                                    let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                                    if let Ok(_) = tx_main.send(ProtoCtrl::Heartbeat(tx)) {
                                         if let Err(_) = rx.recv() {} // ignore
                                     }
                                 }
@@ -483,8 +482,8 @@ impl Lock {
                     // Attempt first ever lock. The return commit timestamp will be our fencing
                     // token. Only one node should be able to do this successfully.
                     initial = false;
-                    let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
-                    if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::InitialLock(tx)) {
+                    let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                    if let Ok(_) = tx_main.send(ProtoCtrl::InitialLock(tx)) {
                         if let Ok(t) = rx.recv() {
                             if t > -1 {
                                 token.store(t as u64, Ordering::Relaxed);
@@ -494,8 +493,8 @@ impl Lock {
                     }
                 } else {
                     // For the succeeding lock attempts.
-                    let (tx, rx): (Sender<Record>, Receiver<Record>) = mpsc::channel();
-                    if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::CurrentToken(tx)) {
+                    let (tx, rx): (Sender<Record>, Receiver<Record>) = channel();
+                    if let Ok(_) = tx_main.send(ProtoCtrl::CurrentToken(tx)) {
                         if let Ok(v) = rx.recv() {
                             if v.token < 0 {
                                 continue;
@@ -507,8 +506,8 @@ impl Lock {
                             let mut token_up: i128 = 0;
                             let mut name = String::new();
                             write!(&mut name, "{}_{}", lock_name, v.token).unwrap();
-                            let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
-                            if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::NextLockInsert { name, tx }) {
+                            let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                            if let Ok(_) = tx_main.send(ProtoCtrl::NextLockInsert { name, tx }) {
                                 if let Ok(t) = rx.recv() {
                                     if t > 0 {
                                         update = true;
@@ -518,9 +517,10 @@ impl Lock {
                             }
 
                             if update {
-                                // We got the lock. Attempt to update the current token to this commit timestamp.
-                                let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
-                                if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
+                                // We got the lock. Attempt to update the current token
+                                // to this commit timestamp.
+                                let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                                if let Ok(_) = tx_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
                                     if let Ok(t) = rx.recv() {
                                         if t > 0 {
                                             // Doesn't mean we're leader, yet.
@@ -548,7 +548,7 @@ impl Lock {
         }
 
         let token = self.token.clone();
-        let (tx, rx): (Sender<Record>, Receiver<Record>) = mpsc::channel();
+        let (tx, rx): (Sender<Record>, Receiver<Record>) = channel();
         if let Ok(_) = self.exit_tx[0].send(ProtoCtrl::CurrentToken(tx)) {
             if let Ok(t) = rx.recv() {
                 let tv = t.token as u64;
