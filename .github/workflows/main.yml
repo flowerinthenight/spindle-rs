@@ -20,7 +20,7 @@ jobs:
     - name: Build example
       run: |
         cd example/
-        cargo build --verbose
+        cargo build
     - name: Run tests
       run: |
         cargo test --verbose
