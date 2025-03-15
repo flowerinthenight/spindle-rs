@@ -99,7 +99,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
                                 .unwrap();
-                            info!("InitialLock commit timestamp: {dt}");
+                            debug!("InitialLock commit timestamp: {dt}");
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
                         }
                         Err(e) => {
@@ -113,7 +113,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
                     error!("InitialLock reply failed: {e}")
                 }
 
-                info!("InitialLock took {:?}", start.elapsed());
+                debug!("InitialLock took {:?}", start.elapsed());
             }
             ProtoCtrl::NextLockInsert { name, tx } => {
                 let start = Instant::now();
