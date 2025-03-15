@@ -1,4 +1,6 @@
 [![main](https://github.com/flowerinthenight/spindle-rs/actions/workflows/main.yml/badge.svg)](https://github.com/flowerinthenight/spindle-rs/actions/workflows/main.yml)
+[![crates.io](https://img.shields.io/crates/v/spindle_rs)](https://crates.io/crates/spindle_rs)
+[![docs-rs](https://img.shields.io/docsrs/spindle_rs)](https://docs.rs/spindle_rs/latest/spindle_rs/)
 
 ## Overview
 
@@ -9,7 +11,7 @@ One use case for this library is [leader election](https://en.wikipedia.org/wiki
 
 ## Usage
 At the moment, the table needs to be created beforehand using the following DDL (`locktable` is just an example):
-```SQL
+```sql
 CREATE TABLE locktable (
     name STRING(MAX) NOT NULL,
     heartbeat TIMESTAMP OPTIONS (allow_commit_timestamp=true),
