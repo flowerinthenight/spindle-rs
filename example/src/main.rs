@@ -1,6 +1,6 @@
 use ctrlc;
 use log::*;
-use spindle::*;
+use spindle_rs::*;
 use std::env;
 use std::error::Error;
 use std::sync::mpsc::channel;

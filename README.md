@@ -21,7 +21,7 @@ CREATE TABLE locktable (
 After creating the lock object, you will call the `run(...)` function which will attempt to acquire a named lock at a regular interval (lease duration). A `has_lock()` function is provided which returns true (along with the lock token) if the lock is successfully acquired. Something like:
 
 ```rust
-use spindle::*;
+use spindle_rs::*;
 ...
 
 fn main() -> Result<(), Box<dyn Error>> {

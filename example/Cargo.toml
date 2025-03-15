@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-spindle = { path = "../spindle" }
+spindle_rs = { path = "../spindle" }
 tokio = { version = "1.43.0", features = ["full"] }
 google-cloud-spanner = { package="gcloud-spanner", version="1.0.0" }
 env_logger = "0.11.7"
