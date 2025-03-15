@@ -53,7 +53,7 @@ enum ProtoCtrl {
     Heartbeat(Sender<i128>),
 }
 
-pub fn get_spanner_client(rt: &Runtime, db: String) -> Client {
+fn get_spanner_client(rt: &Runtime, db: String) -> Client {
     let (tx, rx) = channel();
     rt.block_on(async {
         let config = ClientConfig::default().with_auth().await.unwrap();
@@ -323,6 +323,8 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
     }
 }
 
+/// `Lock` implements distributed locking using Spanner as backing
+/// storage and TrueTime as our source of global true time.
 pub struct Lock {
     db: String,
     table: String,
@@ -581,6 +583,7 @@ impl Lock {
     }
 }
 
+/// `LockBuilder` builds an instance of Lock with default values.
 #[derive(Default)]
 pub struct LockBuilder {
     db: String,
