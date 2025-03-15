@@ -337,6 +337,7 @@ impl Lock {
 
         let tx_ctrl_main = tx_ctrl.clone();
         let duration_ms = self.duration_ms;
+        let token = self.token.clone();
         thread::spawn(move || {
             let mut round: u64 = 0;
             let mut initial = true;
@@ -358,6 +359,16 @@ impl Lock {
                 match rx.recv() {
                     Ok(v) => {
                         info!("CheckLock: {:?}", v);
+
+                        // We are leader now.
+                        if token.load(Ordering::Acquire) == v.token as u64 {
+                            leader.fetch_add(1, Ordering::Relaxed);
+                            info!("leader active (me)");
+                        }
+
+                        if v.diff > 0 {
+                            info!("leader active (not me)");
+                        }
                     }
                     Err(_) => continue,
                 }
@@ -376,6 +387,7 @@ impl Lock {
                     }
                 } else {
                     info!("next");
+                    token.load(Ordering::Acquire);
                 }
             }
         });
