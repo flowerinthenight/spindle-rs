@@ -65,7 +65,6 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
                 return;
             }
             ProtoCtrl::Dummy(tx) => {
-                info!("dummy received");
                 tx.send(true).unwrap();
             }
             ProtoCtrl::InitialLock(tx) => {
@@ -331,6 +330,7 @@ impl Lock {
         LockBuilder::default()
     }
 
+    /// Starts the main lock loop. This function doesn't block.
     pub fn run(&mut self) {
         info!(
             "run: table={}, name={}, id={}, duration={:?}",
@@ -544,6 +544,7 @@ impl Lock {
         active.store(1, Ordering::Relaxed);
     }
 
+    /// Returns true if this instance got the lock, together with the name and lock token.
     pub fn has_lock(&self) -> (bool, String, u64) {
         let active = self.active.clone();
         if active.load(Ordering::Acquire) < 1 {
