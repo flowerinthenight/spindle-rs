@@ -369,7 +369,8 @@ impl Lock {
             // We don't really care about ns precision here; only for random pause.
             let mut bo = BackoffBuilder::new().initial_ns(min).max_ns(max).build();
             loop {
-                if ldr_hb.load(Ordering::Acquire) > 0 {
+                let ldr_val = ldr_hb.load(Ordering::Acquire);
+                if ldr_val > 0 {
                     let start = Instant::now();
                     let mut pause = 0;
                     _ = pause; // warn
@@ -391,14 +392,17 @@ impl Lock {
                         pause -= latency;
                     }
 
-                    info!("pause for {:?}", Duration::from_millis(pause));
+                    info!("heartbeat[{ldr_val}]: pause for {:?}", Duration::from_millis(pause));
                     thread::sleep(Duration::from_millis(pause));
                 } else {
+                    info!("heartbeat[_]: pause for 1s");
                     thread::sleep(Duration::from_secs(1));
                 }
             }
         });
 
+        // Setup the main thread that drives the lock forward. No proper exit here;
+        // let the OS do the cleanup upon termination of main thread.
         let tx_ctrl_main = tx_ctrl.clone();
         let duration_ms = self.duration_ms;
         let token = self.token.clone();
@@ -475,9 +479,9 @@ impl Lock {
                     continue;
                 }
 
-                // Attempt first ever lock. The return commit timestamp will be our fencing
-                // token. Only one node should be able to do this successfully.
                 if initial {
+                    // Attempt first ever lock. The return commit timestamp will be our fencing
+                    // token. Only one node should be able to do this successfully.
                     initial = false;
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
                     if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::InitialLock(tx)) {
@@ -489,6 +493,7 @@ impl Lock {
                         }
                     }
                 } else {
+                    // For the succeeding lock attempts.
                     let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
                     if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::CurrentToken(tx)) {
                         if let Ok(v) = rx.recv() {
@@ -496,6 +501,8 @@ impl Lock {
                                 continue;
                             }
 
+                            // Attempt to grab the next lock. Multiple nodes could potentially
+                            // do this successfully.
                             let mut update = false;
                             let mut token_up: i128 = 0;
                             let mut name = String::new();
@@ -511,10 +518,12 @@ impl Lock {
                             }
 
                             if update {
+                                // We got the lock. Attempt to update the current token to this commit timestamp.
                                 let (tx, rx): (Sender<i128>, Receiver<i128>) = mpsc::channel();
                                 if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
                                     if let Ok(t) = rx.recv() {
                                         if t > 0 {
+                                            // Doesn't mean we're leader, yet.
                                             token.store(token_up as u64, Ordering::Relaxed);
                                             info!("next: got the lock with token {}", token_up);
                                         }
