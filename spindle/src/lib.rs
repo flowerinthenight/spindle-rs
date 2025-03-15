@@ -26,7 +26,7 @@ struct DiffToken {
 }
 
 #[derive(Debug)]
-struct LockVal {
+struct Record {
     name: String,
     heartbeat: i128,
     token: i128,
@@ -41,7 +41,7 @@ enum ProtoCtrl {
     NextLockInsert { name: String, tx: Sender<i128> },
     NextLockUpdate { token: i128, tx: Sender<i128> },
     CheckLock(Sender<DiffToken>),
-    CurrentToken(Sender<LockVal>),
+    CurrentToken(Sender<Record>),
     Heartbeat(Sender<i128>),
 }
 
@@ -235,7 +235,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
             ProtoCtrl::CurrentToken(tx) => {
                 let start = Instant::now();
-                let (tx_in, rx_in): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
+                let (tx_in, rx_in): (Sender<Record>, Receiver<Record>) = mpsc::channel();
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "select token, writer from {} ", table).unwrap();
@@ -249,7 +249,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
                         let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
                         let w = row.column_by_name::<String>("writer").unwrap();
                         tx_in
-                            .send(LockVal {
+                            .send(Record {
                                 name: String::from(""),
                                 heartbeat: 0,
                                 token: t.unix_timestamp_nanos(),
@@ -263,7 +263,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
 
                     if empty {
                         tx_in
-                            .send(LockVal {
+                            .send(Record {
                                 name: String::from(""),
                                 heartbeat: -1,
                                 token: -1,
@@ -334,7 +334,7 @@ impl Lock {
 
     pub fn run(&mut self) {
         info!(
-            "table={}, name={}, id={}, duration={:?}",
+            "run: table={}, name={}, id={}, duration={:?}",
             self.table,
             self.name,
             self.id,
@@ -354,7 +354,7 @@ impl Lock {
         thread::spawn(move || spanner_caller(db, table, lock_name, node_id, rx_ctrl));
 
         // Setup the heartbeat thread (leader only). No proper exit here;
-        // let the OS do the cleanup upon termination of main thread.
+        // let the OS do the cleanup upon termination of the main thread.
         let ldr_hb = leader.clone();
         let min = (self.duration_ms / 10) * 5;
         let max = (self.duration_ms / 10) * 8;
@@ -402,7 +402,7 @@ impl Lock {
         });
 
         // Setup the main thread that drives the lock forward. No proper exit here;
-        // let the OS do the cleanup upon termination of main thread.
+        // let the OS do the cleanup upon termination of the main thread.
         let tx_ctrl_main = tx_ctrl.clone();
         let duration_ms = self.duration_ms;
         let token = self.token.clone();
@@ -494,7 +494,7 @@ impl Lock {
                     }
                 } else {
                     // For the succeeding lock attempts.
-                    let (tx, rx): (Sender<LockVal>, Receiver<LockVal>) = mpsc::channel();
+                    let (tx, rx): (Sender<Record>, Receiver<Record>) = mpsc::channel();
                     if let Ok(_) = tx_ctrl_main.send(ProtoCtrl::CurrentToken(tx)) {
                         if let Ok(v) = rx.recv() {
                             if v.token < 0 {
@@ -539,6 +539,26 @@ impl Lock {
         // Finally, set the system active.
         let active = self.active.clone();
         active.store(1, Ordering::Relaxed);
+    }
+
+    pub fn has_lock(&self) -> (bool, String, u64) {
+        let active = self.active.clone();
+        if active.load(Ordering::Acquire) < 1 {
+            return (false, String::from(""), 0);
+        }
+
+        let token = self.token.clone();
+        let (tx, rx): (Sender<Record>, Receiver<Record>) = mpsc::channel();
+        if let Ok(_) = self.exit_tx[0].send(ProtoCtrl::CurrentToken(tx)) {
+            if let Ok(t) = rx.recv() {
+                let tv = t.token as u64;
+                if tv == token.load(Ordering::Acquire) {
+                    return (true, t.writer, tv);
+                }
+            }
+        }
+
+        return (false, String::from(""), 0);
     }
 
     pub fn close(&mut self) {
