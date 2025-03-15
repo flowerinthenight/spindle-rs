@@ -58,7 +58,8 @@ A sample [code](./example/src/main.rs) is provided to demonstrate the mechanism 
 # Update flags with your values as needed:
 $ cd example/
 $ cargo build
-$ RUST_LOG=info ./target/debug/example
+$ RUST_LOG=info ./target/debug/example \
+  projects/p/instances/i/databases/db locktable
 ```
 
 The leader process should output something like `leader active (me)`. You can then try to stop (Ctrl+C) that process and observe another one taking over as leader.
