@@ -2,6 +2,11 @@
 name = "spindle"
 version = "0.1.0"
 edition = "2024"
+authors = ["flowerinthenight <root@flowerinthenight.com>"]
+description = "A distributed locking crate built on Cloud Spanner and TrueTime."
+license = "Apache 2.0"
+repository = "https://github.com/flowerinthenight/spindle-rs"
+keywords = ["leader-election", "distributed-locking", "distributed-lock", "spanner"]
 
 [dependencies]
 tokio = { version = "1.43.0", features = ["full"] }
