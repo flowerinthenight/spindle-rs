@@ -58,7 +58,8 @@ A sample [code](./example/src/main.rs) is provided to demonstrate the mechanism 
 
 ```bash
 # Update args with your values as needed:
-$ cd example/
+$ git clone https://github.com/flowerinthenight/spindle-rs
+$ cd spindle-rs/
 $ cargo build
 $ RUST_LOG=info ./target/debug/example \
   projects/p/instances/i/databases/db \
