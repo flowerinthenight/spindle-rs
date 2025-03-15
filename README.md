@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 A sample [code](./example/src/main.rs) is provided to demonstrate the mechanism through logs. You can try running multiple processes in multiple terminals.
 
 ```bash
-# Update flags with your values as needed:
+# Update args with your values as needed:
 $ cd example/
 $ cargo build
 $ RUST_LOG=info ./target/debug/example \
