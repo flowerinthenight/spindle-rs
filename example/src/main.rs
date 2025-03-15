@@ -1,6 +1,7 @@
 use ctrlc;
-use log::info;
+use log::*;
 use spindle::*;
+use std::env;
 use std::error::Error;
 use std::sync::mpsc::channel;
 use std::thread;
@@ -8,13 +9,19 @@ use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 3 {
+        error!("provide the db and table args");
+        return Ok(());
+    }
+
     let (tx, rx) = channel();
     ctrlc::set_handler(move || tx.send(()).unwrap()).unwrap();
     let mut lock = LockBuilder::new()
-        .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
-        .table("testlease".to_string())
+        .db(args[1].clone())
+        .table(args[2].clone())
         .name("spindle-rs".to_string())
-        // .id(":8080".to_string())
         .duration_ms(5000)
         .build();
 

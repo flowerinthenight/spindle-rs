@@ -276,7 +276,7 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
                     error!("CurrentToken reply failed: {e}")
                 }
 
-                info!("CurrentToken took {:?}", start.elapsed());
+                debug!("CurrentToken took {:?}", start.elapsed());
             }
             ProtoCtrl::Heartbeat(tx) => {
                 let start = Instant::now();
@@ -636,8 +636,8 @@ mod tests {
     #[test]
     fn no_run() {
         let lock = LockBuilder::new()
-            .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
-            .table("testlease".to_string())
+            .db("projects/p/instances/i/databases/db".to_string())
+            .table("locktable".to_string())
             .name("spindle-rs".to_string())
             .duration_ms(5000)
             .build();
