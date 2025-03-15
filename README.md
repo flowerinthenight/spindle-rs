@@ -57,10 +57,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 A sample [code](./example/src/main.rs) is provided to demonstrate the mechanism through logs. You can try running multiple processes in multiple terminals.
 
 ```bash
-# Update args with your values as needed:
 $ git clone https://github.com/flowerinthenight/spindle-rs
 $ cd spindle-rs/
 $ cargo build
+# Update args with your actual values:
 $ RUST_LOG=info ./target/debug/example \
   projects/p/instances/i/databases/db \
   locktable
