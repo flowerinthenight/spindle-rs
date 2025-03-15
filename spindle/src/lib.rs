@@ -391,10 +391,10 @@ impl Lock {
                         pause -= latency;
                     }
 
-                    info!("heartbeat[{ldr_val}]: pause for {:?}", Duration::from_millis(pause));
+                    debug!("heartbeat[{ldr_val}]: pause for {:?}", Duration::from_millis(pause));
                     thread::sleep(Duration::from_millis(pause));
                 } else {
-                    info!("heartbeat[_]: pause for 1s");
+                    debug!("heartbeat[_]: pause for 1s");
                     thread::sleep(Duration::from_secs(1));
                 }
             }
@@ -412,11 +412,16 @@ impl Lock {
             loop {
                 round += 1;
                 let start = Instant::now();
-                info!("");
 
                 defer! {
+                    let mut pause = duration_ms;
+                    let latency = start.elapsed().as_millis() as u64;
+                    if latency < duration_ms {
+                        pause -= latency;
+                    }
+
                     info!("round {} took {:?}", round, start.elapsed());
-                    thread::sleep(Duration::from_millis(duration_ms));
+                    thread::sleep(Duration::from_millis(pause));
                 }
 
                 // First, see if already locked (could be us or somebody else).
@@ -449,7 +454,6 @@ impl Lock {
                                 let mut alive: bool = false;
                                 let diff = v.diff as u64;
                                 if diff <= duration_ms {
-                                    info!("diff <= duration, diff={diff}, duration={duration_ms}");
                                     alive = true;
                                 } else if diff > duration_ms {
                                     // Sometimes, its going to go beyond duration+drift, even
@@ -457,7 +461,6 @@ impl Lock {
                                     // new leader for now.
                                     let ovr = diff - duration_ms;
                                     alive = ovr <= 1000; // allow 1s drift
-                                    info!("diff > duration, diff={diff}, duration={duration_ms}, ovr={ovr}");
                                 }
 
                                 if alive {
