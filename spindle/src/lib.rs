@@ -631,16 +631,19 @@ impl LockBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn label() {
-        let cond = 1;
-        let result = 'b: {
-            if cond < 5 {
-                break 'b 1;
-            } else {
-                break 'b 2;
-            }
-        };
-        assert_eq!(result, 1);
+    fn no_run() {
+        let lock = LockBuilder::new()
+            .db("projects/mobingi-main/instances/alphaus-prod/databases/main".to_string())
+            .table("testlease".to_string())
+            .name("spindle-rs".to_string())
+            .duration_ms(5000)
+            .build();
+
+        let (locked, _, token) = lock.has_lock();
+        assert_eq!(locked, false);
+        assert_eq!(token, 0);
     }
 }
