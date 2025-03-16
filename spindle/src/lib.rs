@@ -337,7 +337,7 @@ pub struct Lock {
     duration_ms: u64,
     active: Arc<AtomicUsize>,
     token: Arc<AtomicU64>,
-    exit_tx: Vec<Sender<ProtoCtrl>>,
+    tx_ctrl: Vec<Sender<ProtoCtrl>>,
 }
 
 impl Lock {
@@ -361,7 +361,7 @@ impl Lock {
         // Setup Spanner query thread. Delegate to a separate thread to have
         // a better control over async calls and a tokio runtime.
         let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = channel();
-        self.exit_tx.push(tx_ctrl.clone());
+        self.tx_ctrl.push(tx_ctrl.clone());
         let db = self.db.clone();
         let table = self.table.clone();
         let lock_name = self.name.clone();
@@ -569,7 +569,7 @@ impl Lock {
 
         let token = self.token.clone();
         let (tx, rx): (Sender<Record>, Receiver<Record>) = channel();
-        if let Ok(_) = self.exit_tx[0].send(ProtoCtrl::CurrentToken(tx)) {
+        if let Ok(_) = self.tx_ctrl[0].send(ProtoCtrl::CurrentToken(tx)) {
             if let Ok(t) = rx.recv() {
                 let tv = t.token as u64;
                 if tv == token.load(Ordering::Acquire) {
@@ -582,7 +582,7 @@ impl Lock {
     }
 
     pub fn close(&mut self) {
-        if let Err(e) = self.exit_tx[0].send(ProtoCtrl::Exit) {
+        if let Err(e) = self.tx_ctrl[0].send(ProtoCtrl::Exit) {
             error!("ProtoCtrl::Exit failed: {e}");
         };
     }
@@ -642,7 +642,7 @@ impl LockBuilder {
             duration_ms: self.duration_ms,
             active: Arc::new(AtomicUsize::new(0)),
             token: Arc::new(AtomicU64::new(0)),
-            exit_tx: vec![],
+            tx_ctrl: vec![],
         }
     }
 }
