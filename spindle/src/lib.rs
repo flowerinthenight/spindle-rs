@@ -403,7 +403,7 @@ impl Lock {
                     }
 
                     let latency = start.elapsed().as_millis() as u64;
-                    if latency < pause {
+                    if latency < pause && (pause - latency) > 0 {
                         pause -= latency;
                     }
 
@@ -432,7 +432,7 @@ impl Lock {
                 defer! {
                     let mut pause = duration_ms;
                     let latency = start.elapsed().as_millis() as u64;
-                    if latency < duration_ms {
+                    if latency < duration_ms && (pause-latency) > 0{
                         pause -= latency;
                     }
 
