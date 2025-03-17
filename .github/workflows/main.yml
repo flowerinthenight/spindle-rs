@@ -26,7 +26,8 @@ jobs:
 
     - name: Run tests
       run: |
-        cargo test --verbose
+        cd spindle/
+        cargo test
 
     - name: Release from tags
       if: startsWith(github.event.ref, 'refs/tags/v')
