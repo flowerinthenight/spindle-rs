@@ -53,280 +53,6 @@ enum ProtoCtrl {
     Heartbeat(Sender<i128>),
 }
 
-fn get_spanner_client(rt: &Runtime, db: String) -> Client {
-    let (tx, rx) = channel();
-    rt.block_on(async {
-        let config = ClientConfig::default().with_auth().await.unwrap();
-        let client = Client::new(db, config).await.unwrap();
-        tx.send(client).unwrap();
-    });
-
-    rx.recv().unwrap()
-}
-
-// This will be running on a separate thread. Caller thread will be requesting Spanner async calls
-// here through ProtoCtrl commands using channels for exchanging information. This is an easier
-// approach for allowing our main threads to have access to async function calls. Here, a single
-// tokio runtime is being used to block on these async calls.
-fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: Receiver<ProtoCtrl>) {
-    let rt = Runtime::new().unwrap();
-    let client = get_spanner_client(&rt, db);
-    for code in rx_ctrl {
-        match code {
-            ProtoCtrl::Exit => {
-                rt.block_on(async { client.close().await });
-                return;
-            }
-            ProtoCtrl::Dummy(tx) => {
-                tx.send(true).unwrap();
-            }
-            ProtoCtrl::InitialLock(tx) => {
-                let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
-                rt.block_on(async {
-                    let mut q = String::new();
-                    write!(&mut q, "insert {} ", table).unwrap();
-                    write!(&mut q, "(name, heartbeat, token, writer) ").unwrap();
-                    write!(&mut q, "values (").unwrap();
-                    write!(&mut q, "'{}',", name).unwrap();
-                    write!(&mut q, "PENDING_COMMIT_TIMESTAMP(),").unwrap();
-                    write!(&mut q, "PENDING_COMMIT_TIMESTAMP(),").unwrap();
-                    write!(&mut q, "'{}')", id).unwrap();
-                    let stmt = Statement::new(q);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt).await;
-                    let res = tx.end(res, None).await;
-                    match res {
-                        Ok(s) => {
-                            let ts = s.0.unwrap();
-                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
-                                .unwrap()
-                                .replace_nanosecond(ts.nanos as u32)
-                                .unwrap();
-                            debug!("InitialLock commit timestamp: {dt}");
-                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(e) => {
-                            error!("InitialLock DML failed: {e}");
-                            tx_in.send(-1).unwrap();
-                        }
-                    };
-                });
-
-                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("InitialLock reply failed: {e}")
-                }
-
-                debug!("InitialLock took {:?}", start.elapsed());
-            }
-            ProtoCtrl::NextLockInsert { name, tx } => {
-                let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
-                rt.block_on(async {
-                    let mut q = String::new();
-                    write!(&mut q, "insert {} ", table).unwrap();
-                    write!(&mut q, "(name) ").unwrap();
-                    write!(&mut q, "values ('{}')", name).unwrap();
-                    let stmt = Statement::new(q);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt).await;
-                    let res = tx.end(res, None).await;
-                    match res {
-                        Ok(s) => {
-                            let ts = s.0.unwrap();
-                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
-                                .unwrap()
-                                .replace_nanosecond(ts.nanos as u32)
-                                .unwrap();
-                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(e) => {
-                            error!("NextLockInsert DML failed: {e}");
-                            tx_in.send(-1).unwrap();
-                        }
-                    };
-                });
-
-                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("NextLockInsert reply failed: {e}")
-                }
-
-                debug!("NextLockInsert took {:?}", start.elapsed());
-            }
-            ProtoCtrl::NextLockUpdate { token, tx } => {
-                let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
-                rt.block_on(async {
-                    let mut q = String::new();
-                    write!(&mut q, "update {} set ", table).unwrap();
-                    write!(&mut q, "heartbeat = PENDING_COMMIT_TIMESTAMP(), ").unwrap();
-                    write!(&mut q, "token = @token, ").unwrap();
-                    write!(&mut q, "writer = @writer ").unwrap();
-                    write!(&mut q, "where name = @name").unwrap();
-                    let mut stmt1 = Statement::new(q);
-                    let odt = OffsetDateTime::from_unix_timestamp_nanos(token).unwrap();
-                    stmt1.add_param("token", &odt);
-                    stmt1.add_param("writer", &id);
-                    stmt1.add_param("name", &name);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt1).await;
-
-                    // Best-effort cleanup.
-                    let mut q = String::new();
-                    write!(&mut q, "delete from {} ", table).unwrap();
-                    write!(&mut q, "where starts_with(name, '{}_')", name).unwrap();
-                    let stmt2 = Statement::new(q);
-                    let _ = tx.update(stmt2).await;
-
-                    let res = tx.end(res, None).await;
-                    match res {
-                        Ok(s) => {
-                            let ts = s.0.unwrap();
-                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
-                                .unwrap()
-                                .replace_nanosecond(ts.nanos as u32)
-                                .unwrap();
-                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(e) => {
-                            error!("NextLockUpdate DML failed: {e}");
-                            tx_in.send(-1).unwrap();
-                        }
-                    };
-                });
-
-                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("NextLockUpdate reply failed: {e}")
-                }
-
-                debug!("NextLockUpdate took {:?}", start.elapsed());
-            }
-            ProtoCtrl::CheckLock(tx) => {
-                let start = Instant::now();
-                let (tx_in, rx_in): (Sender<DiffToken>, Receiver<DiffToken>) = channel();
-                rt.block_on(async {
-                    let mut q = String::new();
-                    write!(&mut q, "select ",).unwrap();
-                    write!(
-                        &mut q,
-                        "timestamp_diff(current_timestamp(), heartbeat, millisecond) as diff, ",
-                    )
-                    .unwrap();
-                    write!(&mut q, "token from {} ", table).unwrap();
-                    write!(&mut q, "where name = @name").unwrap();
-                    let mut stmt = Statement::new(q);
-                    stmt.add_param("name", &name);
-                    let mut tx = client.single().await.unwrap();
-                    let mut iter = tx.query(stmt).await.unwrap();
-                    let mut empty = true;
-                    while let Some(row) = iter.next().await.unwrap() {
-                        let d = row.column_by_name::<i64>("diff").unwrap();
-                        let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
-                        tx_in
-                            .send(DiffToken {
-                                diff: d,
-                                token: t.unix_timestamp_nanos(),
-                            })
-                            .unwrap();
-
-                        empty = false;
-                        break; // ensure single line
-                    }
-
-                    if empty {
-                        tx_in.send(DiffToken { diff: 0, token: -1 }).unwrap();
-                    }
-                });
-
-                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("CheckLock reply failed: {e}")
-                }
-
-                debug!("CheckLock took {:?}", start.elapsed());
-            }
-            ProtoCtrl::CurrentToken(tx) => {
-                let start = Instant::now();
-                let (tx_in, rx_in): (Sender<Record>, Receiver<Record>) = channel();
-                rt.block_on(async {
-                    let mut q = String::new();
-                    write!(&mut q, "select token, writer from {} ", table).unwrap();
-                    write!(&mut q, "where name = @name").unwrap();
-                    let mut stmt = Statement::new(q);
-                    stmt.add_param("name", &name);
-                    let mut tx = client.single().await.unwrap();
-                    let mut iter = tx.query(stmt).await.unwrap();
-                    let mut empty = true;
-                    while let Some(row) = iter.next().await.unwrap() {
-                        let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
-                        let w = row.column_by_name::<String>("writer").unwrap();
-                        tx_in
-                            .send(Record {
-                                name: String::from(""),
-                                heartbeat: 0,
-                                token: t.unix_timestamp_nanos(),
-                                writer: w,
-                            })
-                            .unwrap();
-
-                        empty = false;
-                        break; // ensure single line
-                    }
-
-                    if empty {
-                        tx_in
-                            .send(Record {
-                                name: String::from(""),
-                                heartbeat: -1,
-                                token: -1,
-                                writer: String::from(""),
-                            })
-                            .unwrap();
-                    }
-                });
-
-                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("CurrentToken reply failed: {e}")
-                }
-
-                debug!("CurrentToken took {:?}", start.elapsed());
-            }
-            ProtoCtrl::Heartbeat(tx) => {
-                let start = Instant::now();
-                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
-                rt.block_on(async {
-                    let mut q = String::new();
-                    write!(&mut q, "update {} ", table).unwrap();
-                    write!(&mut q, "set heartbeat = PENDING_COMMIT_TIMESTAMP() ").unwrap();
-                    write!(&mut q, "where name = @name").unwrap();
-                    let mut stmt = Statement::new(q);
-                    stmt.add_param("name", &name);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt).await;
-                    let res = tx.end(res, None).await;
-                    match res {
-                        Ok(s) => {
-                            let ts = s.0.unwrap();
-                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
-                                .unwrap()
-                                .replace_nanosecond(ts.nanos as u32)
-                                .unwrap();
-                            debug!("Heartbeat commit timestamp: {dt}");
-                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(_) => tx_in.send(-1).unwrap(),
-                    };
-                });
-
-                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
-                    error!("Heartbeat reply failed: {e}")
-                }
-
-                debug!("Heartbeat took {:?}", start.elapsed());
-            }
-        }
-    }
-}
-
 /// `Lock` implements distributed locking using Spanner as backing
 /// storage and TrueTime as our source of global true time.
 pub struct Lock {
@@ -645,6 +371,280 @@ impl LockBuilder {
             tx_ctrl: vec![],
         }
     }
+}
+
+// This will be running on a separate thread. Caller thread will be requesting Spanner async calls
+// here through ProtoCtrl commands using channels for exchanging information. This is an easier
+// approach for allowing our main threads to have access to async function calls. Here, a single
+// tokio runtime is being used to block on these async calls.
+fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: Receiver<ProtoCtrl>) {
+    let rt = Runtime::new().unwrap();
+    let client = get_spanner_client(&rt, db);
+    for code in rx_ctrl {
+        match code {
+            ProtoCtrl::Exit => {
+                rt.block_on(async { client.close().await });
+                return;
+            }
+            ProtoCtrl::Dummy(tx) => {
+                tx.send(true).unwrap();
+            }
+            ProtoCtrl::InitialLock(tx) => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "insert {} ", table).unwrap();
+                    write!(&mut q, "(name, heartbeat, token, writer) ").unwrap();
+                    write!(&mut q, "values (").unwrap();
+                    write!(&mut q, "'{}',", name).unwrap();
+                    write!(&mut q, "PENDING_COMMIT_TIMESTAMP(),").unwrap();
+                    write!(&mut q, "PENDING_COMMIT_TIMESTAMP(),").unwrap();
+                    write!(&mut q, "'{}')", id).unwrap();
+                    let stmt = Statement::new(q);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res = tx.update(stmt).await;
+                    let res = tx.end(res, None).await;
+                    match res {
+                        Ok(s) => {
+                            let ts = s.0.unwrap();
+                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
+                                .unwrap()
+                                .replace_nanosecond(ts.nanos as u32)
+                                .unwrap();
+                            debug!("InitialLock commit timestamp: {dt}");
+                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
+                        }
+                        Err(e) => {
+                            error!("InitialLock DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
+                    };
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("InitialLock reply failed: {e}")
+                }
+
+                debug!("InitialLock took {:?}", start.elapsed());
+            }
+            ProtoCtrl::NextLockInsert { name, tx } => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "insert {} ", table).unwrap();
+                    write!(&mut q, "(name) ").unwrap();
+                    write!(&mut q, "values ('{}')", name).unwrap();
+                    let stmt = Statement::new(q);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res = tx.update(stmt).await;
+                    let res = tx.end(res, None).await;
+                    match res {
+                        Ok(s) => {
+                            let ts = s.0.unwrap();
+                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
+                                .unwrap()
+                                .replace_nanosecond(ts.nanos as u32)
+                                .unwrap();
+                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
+                        }
+                        Err(e) => {
+                            error!("NextLockInsert DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
+                    };
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("NextLockInsert reply failed: {e}")
+                }
+
+                debug!("NextLockInsert took {:?}", start.elapsed());
+            }
+            ProtoCtrl::NextLockUpdate { token, tx } => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "update {} set ", table).unwrap();
+                    write!(&mut q, "heartbeat = PENDING_COMMIT_TIMESTAMP(), ").unwrap();
+                    write!(&mut q, "token = @token, ").unwrap();
+                    write!(&mut q, "writer = @writer ").unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt1 = Statement::new(q);
+                    let odt = OffsetDateTime::from_unix_timestamp_nanos(token).unwrap();
+                    stmt1.add_param("token", &odt);
+                    stmt1.add_param("writer", &id);
+                    stmt1.add_param("name", &name);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res = tx.update(stmt1).await;
+
+                    // Best-effort cleanup.
+                    let mut q = String::new();
+                    write!(&mut q, "delete from {} ", table).unwrap();
+                    write!(&mut q, "where starts_with(name, '{}_')", name).unwrap();
+                    let stmt2 = Statement::new(q);
+                    let _ = tx.update(stmt2).await;
+
+                    let res = tx.end(res, None).await;
+                    match res {
+                        Ok(s) => {
+                            let ts = s.0.unwrap();
+                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
+                                .unwrap()
+                                .replace_nanosecond(ts.nanos as u32)
+                                .unwrap();
+                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
+                        }
+                        Err(e) => {
+                            error!("NextLockUpdate DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
+                    };
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("NextLockUpdate reply failed: {e}")
+                }
+
+                debug!("NextLockUpdate took {:?}", start.elapsed());
+            }
+            ProtoCtrl::CheckLock(tx) => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<DiffToken>, Receiver<DiffToken>) = channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "select ",).unwrap();
+                    write!(
+                        &mut q,
+                        "timestamp_diff(current_timestamp(), heartbeat, millisecond) as diff, ",
+                    )
+                    .unwrap();
+                    write!(&mut q, "token from {} ", table).unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt = Statement::new(q);
+                    stmt.add_param("name", &name);
+                    let mut tx = client.single().await.unwrap();
+                    let mut iter = tx.query(stmt).await.unwrap();
+                    let mut empty = true;
+                    while let Some(row) = iter.next().await.unwrap() {
+                        let d = row.column_by_name::<i64>("diff").unwrap();
+                        let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
+                        tx_in
+                            .send(DiffToken {
+                                diff: d,
+                                token: t.unix_timestamp_nanos(),
+                            })
+                            .unwrap();
+
+                        empty = false;
+                        break; // ensure single line
+                    }
+
+                    if empty {
+                        tx_in.send(DiffToken { diff: 0, token: -1 }).unwrap();
+                    }
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("CheckLock reply failed: {e}")
+                }
+
+                debug!("CheckLock took {:?}", start.elapsed());
+            }
+            ProtoCtrl::CurrentToken(tx) => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<Record>, Receiver<Record>) = channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "select token, writer from {} ", table).unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt = Statement::new(q);
+                    stmt.add_param("name", &name);
+                    let mut tx = client.single().await.unwrap();
+                    let mut iter = tx.query(stmt).await.unwrap();
+                    let mut empty = true;
+                    while let Some(row) = iter.next().await.unwrap() {
+                        let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
+                        let w = row.column_by_name::<String>("writer").unwrap();
+                        tx_in
+                            .send(Record {
+                                name: String::from(""),
+                                heartbeat: 0,
+                                token: t.unix_timestamp_nanos(),
+                                writer: w,
+                            })
+                            .unwrap();
+
+                        empty = false;
+                        break; // ensure single line
+                    }
+
+                    if empty {
+                        tx_in
+                            .send(Record {
+                                name: String::from(""),
+                                heartbeat: -1,
+                                token: -1,
+                                writer: String::from(""),
+                            })
+                            .unwrap();
+                    }
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("CurrentToken reply failed: {e}")
+                }
+
+                debug!("CurrentToken took {:?}", start.elapsed());
+            }
+            ProtoCtrl::Heartbeat(tx) => {
+                let start = Instant::now();
+                let (tx_in, rx_in): (Sender<i128>, Receiver<i128>) = channel();
+                rt.block_on(async {
+                    let mut q = String::new();
+                    write!(&mut q, "update {} ", table).unwrap();
+                    write!(&mut q, "set heartbeat = PENDING_COMMIT_TIMESTAMP() ").unwrap();
+                    write!(&mut q, "where name = @name").unwrap();
+                    let mut stmt = Statement::new(q);
+                    stmt.add_param("name", &name);
+                    let mut tx = client.begin_read_write_transaction().await.unwrap();
+                    let res = tx.update(stmt).await;
+                    let res = tx.end(res, None).await;
+                    match res {
+                        Ok(s) => {
+                            let ts = s.0.unwrap();
+                            let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
+                                .unwrap()
+                                .replace_nanosecond(ts.nanos as u32)
+                                .unwrap();
+                            debug!("Heartbeat commit timestamp: {dt}");
+                            tx_in.send(dt.unix_timestamp_nanos()).unwrap();
+                        }
+                        Err(_) => tx_in.send(-1).unwrap(),
+                    };
+                });
+
+                if let Err(e) = tx.send(rx_in.recv().unwrap()) {
+                    error!("Heartbeat reply failed: {e}")
+                }
+
+                debug!("Heartbeat took {:?}", start.elapsed());
+            }
+        }
+    }
+}
+
+fn get_spanner_client(rt: &Runtime, db: String) -> Client {
+    let (tx, rx) = channel();
+    rt.block_on(async {
+        let config = ClientConfig::default().with_auth().await.unwrap();
+        let client = Client::new(db, config).await.unwrap();
+        tx.send(client).unwrap();
+    });
+
+    rx.recv().unwrap()
 }
 
 #[cfg(test)]
