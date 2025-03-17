@@ -4,6 +4,7 @@ name: main
 on:
   push:
     branches: [ "main" ]
+    tags: ['*']
   pull_request:
     branches: [ "main" ]
 
@@ -17,10 +18,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
     - name: Build example
       run: |
         cd example/
         cargo build
+
     - name: Run tests
       run: |
         cargo test --verbose
+
+    - name: Release from tags
+      if: startsWith(github.event.ref, 'refs/tags/v')
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      run: |
+        cd example/
+        rustup target add x86_64-unknown-linux-gnu
+        cargo build --release --target=x86_64-unknown-linux-gnu
+        tar czvf spindle-${GITHUB_REF_NAME}-x86_64-linux.tar.gz target/x86_64-unknown-linux-gnu/release/example
+        gh release create ${GITHUB_REF_NAME} ./*.tar.gz --generate-notes
