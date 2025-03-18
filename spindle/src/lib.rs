@@ -590,11 +590,8 @@ fn spanner_caller(
                 rt.block_on(async {
                     let mut q = String::new();
                     write!(&mut q, "select ",).unwrap();
-                    write!(
-                        &mut q,
-                        "timestamp_diff(current_timestamp(), heartbeat, millisecond) as diff, ",
-                    )
-                    .unwrap();
+                    write!(&mut q, "timestamp_diff(current_timestamp(), ",).unwrap();
+                    write!(&mut q, "heartbeat, millisecond) as diff, ",).unwrap();
                     write!(&mut q, "token from {} ", table).unwrap();
                     write!(&mut q, "where name = @name").unwrap();
                     let mut stmt = Statement::new(q);
