@@ -91,7 +91,7 @@ impl Lock {
         let leader = Arc::new(AtomicUsize::new(0));
 
         // Setup Spanner query thread. Delegate to a separate thread to have
-        // a better control over async calls and a tokio runtime.
+        // a better control over how async calls are blocked on a Tokio runtime.
         let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = channel();
         self.tx_ctrl.push(tx_ctrl.clone());
         let db = self.db.clone();
