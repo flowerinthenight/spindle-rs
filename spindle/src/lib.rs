@@ -7,8 +7,7 @@
 //! If you want one host/node/pod to be the leader within a cluster/group, you can achieve that with this
 //! library. When the leader fails, it will fail over to another host/node/pod within a specific timeout.
 
-use anyhow::Result;
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use exp_backoff::BackoffBuilder;
 use google_cloud_spanner::client::Client;
 use google_cloud_spanner::client::ClientConfig;
@@ -76,7 +75,7 @@ impl Lock {
 
     /// Starts the main lock loop. This function doesn't block. If the duration is
     /// set to less than 1s, it will default to 1s (minimum).
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Result<(), anyhow::Error> {
         let mut duration_ms = self.duration_ms;
         if duration_ms < 1_000 {
             duration_ms = 1_000;
@@ -103,10 +102,7 @@ impl Lock {
         let node_id = self.id.clone();
         thread::spawn(move || spanner_caller(db, table, lock_name, node_id, rx_ctrl, tx_ok));
 
-        if let Err(e) = rx_ok.recv().unwrap() {
-            error!("{e}");
-            return;
-        }
+        rx_ok.recv().unwrap()?; // don't proceed if Spanner client failed
 
         // Setup the heartbeat thread (leader only). No proper exit here;
         // let the OS do the cleanup upon termination of the main thread.
@@ -310,6 +306,8 @@ impl Lock {
         // Finally, set the system active.
         let active = self.active.clone();
         active.store(1, Ordering::Relaxed);
+
+        Ok(())
     }
 
     /// Returns true if this instance got the lock, together with the name and lock token.

@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .duration_ms(3000)
         .build();
 
-    lock.run();
+    let _ = lock.run();
 
     // Wait for a bit before calling has_lock().
     thread::sleep(Duration::from_secs(10));
