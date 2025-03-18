@@ -130,7 +130,7 @@ impl Lock {
                     }
 
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                    if let Ok(_) = tx_hb.send(ProtoCtrl::Heartbeat(tx)) {
+                    if tx_hb.send(ProtoCtrl::Heartbeat(tx)).is_ok() {
                         if rx.recv().is_err() {} // ignore, best-effort only
                     }
 
@@ -232,7 +232,7 @@ impl Lock {
                     // our fencing token. Only one node should be able to do this.
                     initial = false;
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                    if let Err(_) = tx_main.send(ProtoCtrl::InitialLock(tx)) {
+                    if tx_main.send(ProtoCtrl::InitialLock(tx)).is_err() {
                         continue 'outer;
                     }
 
