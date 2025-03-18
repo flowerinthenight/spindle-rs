@@ -32,9 +32,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut lock = LockBuilder::new()
         .db("projects/p/instances/i/databases/db".to_string())
         .table("locktable".to_string()) // see CREATE TABLE
-        .name("spindle-rs".to_string())
-        // .id(":8080".to_string())
-        .duration_ms(5000)
+        .name("spindle-rs".to_string()) // lock name
+        .duration_ms(3000)
         .build();
 
     lock.run();
