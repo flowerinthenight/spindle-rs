@@ -131,7 +131,7 @@ impl Lock {
 
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
                     if let Ok(_) = tx_hb.send(ProtoCtrl::Heartbeat(tx)) {
-                        if let Err(_) = rx.recv() {} // ignore
+                        if rx.recv().is_err() {} // ignore, best-effort only
                     }
 
                     let latency = start.elapsed().as_millis() as u64;
@@ -173,7 +173,7 @@ impl Lock {
 
                 // First, see if already locked (could be us or somebody else).
                 let (tx, rx): (Sender<DiffToken>, Receiver<DiffToken>) = channel();
-                if let Err(_) = tx_main.send(ProtoCtrl::CheckLock(tx)) {
+                if tx_main.send(ProtoCtrl::CheckLock(tx)).is_err() {
                     continue 'outer;
                 }
 
@@ -186,7 +186,7 @@ impl Lock {
                             if leader.load(Ordering::Acquire) == 1 {
                                 let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
                                 if let Ok(_) = tx_main.send(ProtoCtrl::Heartbeat(tx)) {
-                                    if let Err(_) = rx.recv() {} // ignore
+                                    if rx.recv().is_err() {} // ignore
                                 }
                             }
 
@@ -267,7 +267,7 @@ impl Lock {
                     let mut name = String::new();
                     write!(&mut name, "{}_{}", lock_name, token_in).unwrap();
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                    if let Err(_) = tx_main.send(ProtoCtrl::NextLockInsert { name, tx }) {
+                    if tx_main.send(ProtoCtrl::NextLockInsert { name, tx }).is_err() {
                         continue 'outer;
                     }
 
@@ -284,7 +284,7 @@ impl Lock {
 
                     // We got the lock. Attempt to update the current token to this commit timestamp.
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                    if let Err(_) = tx_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
+                    if tx_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }).is_err() {
                         continue 'outer;
                     }
 
@@ -313,7 +313,7 @@ impl Lock {
 
         let token = self.token.clone();
         let (tx, rx): (Sender<Record>, Receiver<Record>) = channel();
-        if let Err(_) = self.tx_ctrl[0].send(ProtoCtrl::CurrentToken(tx)) {
+        if self.tx_ctrl[0].send(ProtoCtrl::CurrentToken(tx)).is_err() {
             return (false, String::from(""), 0);
         }
 
