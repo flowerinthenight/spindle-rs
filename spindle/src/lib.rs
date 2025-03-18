@@ -458,9 +458,15 @@ fn spanner_caller(
                     write!(&mut q, "PENDING_COMMIT_TIMESTAMP(),").unwrap();
                     write!(&mut q, "'{}')", id).unwrap();
                     let stmt = Statement::new(q);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt).await;
-                    let res = tx.end(res, None).await;
+                    let rwt = client.begin_read_write_transaction().await;
+                    if rwt.is_err() {
+                        tx.send(-1).unwrap();
+                        return;
+                    }
+
+                    let mut t = rwt.unwrap();
+                    let res = t.update(stmt).await;
+                    let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
                             let ts = s.0.unwrap();
@@ -493,9 +499,15 @@ fn spanner_caller(
                     write!(&mut q, "(name) ").unwrap();
                     write!(&mut q, "values ('{}')", name).unwrap();
                     let stmt = Statement::new(q);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt).await;
-                    let res = tx.end(res, None).await;
+                    let rwt = client.begin_read_write_transaction().await;
+                    if rwt.is_err() {
+                        tx.send(-1).unwrap();
+                        return;
+                    }
+
+                    let mut t = rwt.unwrap();
+                    let res = t.update(stmt).await;
+                    let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
                             let ts = s.0.unwrap();
@@ -533,17 +545,23 @@ fn spanner_caller(
                     stmt1.add_param("token", &odt);
                     stmt1.add_param("writer", &id);
                     stmt1.add_param("name", &name);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt1).await;
+                    let rwt = client.begin_read_write_transaction().await;
+                    if rwt.is_err() {
+                        tx.send(-1).unwrap();
+                        return;
+                    }
+
+                    let mut t = rwt.unwrap();
+                    let res = t.update(stmt1).await;
 
                     // Best-effort cleanup.
                     let mut q = String::new();
                     write!(&mut q, "delete from {} ", table).unwrap();
                     write!(&mut q, "where starts_with(name, '{}_')", name).unwrap();
                     let stmt2 = Statement::new(q);
-                    let _ = tx.update(stmt2).await;
+                    let _ = t.update(stmt2).await;
 
-                    let res = tx.end(res, None).await;
+                    let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
                             let ts = s.0.unwrap();
@@ -665,9 +683,15 @@ fn spanner_caller(
                     write!(&mut q, "where name = @name").unwrap();
                     let mut stmt = Statement::new(q);
                     stmt.add_param("name", &name);
-                    let mut tx = client.begin_read_write_transaction().await.unwrap();
-                    let res = tx.update(stmt).await;
-                    let res = tx.end(res, None).await;
+                    let rwt = client.begin_read_write_transaction().await;
+                    if rwt.is_err() {
+                        tx.send(-1).unwrap();
+                        return;
+                    }
+
+                    let mut t = rwt.unwrap();
+                    let res = t.update(stmt).await;
+                    let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
                             let ts = s.0.unwrap();
