@@ -1,6 +1,6 @@
 [package]
 name = "spindle_rs"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 authors = ["flowerinthenight <root@flowerinthenight.com>"]
 description = "A distributed locking crate built on Cloud Spanner and TrueTime."
