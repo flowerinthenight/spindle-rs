@@ -72,14 +72,20 @@ impl Lock {
         LockBuilder::default()
     }
 
-    /// Starts the main lock loop. This function doesn't block.
+    /// Starts the main lock loop. This function doesn't block. If the duration is
+    /// set to less than 1s, it will default to 1s (minimum).
     pub fn run(&mut self) {
+        let mut duration_ms = self.duration_ms;
+        if duration_ms < 1_000 {
+            duration_ms = 1_000;
+        }
+
         info!(
             "start run: table={}, name={}, id={}, duration={:?}",
             self.table,
             self.name,
             self.id,
-            Duration::from_millis(self.duration_ms)
+            Duration::from_millis(duration_ms)
         );
 
         let leader = Arc::new(AtomicUsize::new(0));
@@ -97,8 +103,8 @@ impl Lock {
         // Setup the heartbeat thread (leader only). No proper exit here;
         // let the OS do the cleanup upon termination of the main thread.
         let ldr_hb = leader.clone();
-        let min = (self.duration_ms / 10) * 5;
-        let max = (self.duration_ms / 10) * 8;
+        let min = (duration_ms / 10) * 5;
+        let max = (duration_ms / 10) * 8;
         let tx_hb = tx_ctrl.clone();
         thread::spawn(move || {
             info!(
@@ -145,13 +151,12 @@ impl Lock {
         // Setup the main thread that drives the lock forward. No proper exit here;
         // let the OS do the cleanup upon termination of the main thread.
         let tx_main = tx_ctrl.clone();
-        let duration_ms = self.duration_ms;
         let token = self.token.clone();
         let lock_name = self.name.clone();
         thread::spawn(move || {
             let mut round: u64 = 0;
             let mut initial = true;
-            loop {
+            'outer: loop {
                 round += 1;
                 let start = Instant::now();
 
@@ -169,112 +174,125 @@ impl Lock {
                 // First, see if already locked (could be us or somebody else).
                 let (tx, rx): (Sender<DiffToken>, Receiver<DiffToken>) = channel();
                 if let Err(_) = tx_main.send(ProtoCtrl::CheckLock(tx)) {
-                    continue;
+                    continue 'outer;
                 }
 
                 let mut locked = false;
-                match rx.recv() {
-                    Ok(v) => {
-                        'single: loop {
-                            // We are leader now.
-                            if token.load(Ordering::Acquire) == v.token as u64 {
-                                leader.fetch_add(1, Ordering::Relaxed);
-                                if leader.load(Ordering::Acquire) == 1 {
-                                    let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                                    if let Ok(_) = tx_main.send(ProtoCtrl::Heartbeat(tx)) {
-                                        if let Err(_) = rx.recv() {} // ignore
-                                    }
-                                }
-
-                                info!("leader active (me)");
-                                locked = true;
-                                break 'single;
-                            }
-
-                            // We're not leader now.
-                            if v.diff > 0 {
-                                let mut alive: bool = false;
-                                let diff = v.diff as u64;
-                                if diff <= duration_ms {
-                                    alive = true;
-                                } else if diff > duration_ms {
-                                    // Sometimes, its going to go beyond duration+drift, even
-                                    // in normal situations. In that case, we will allow a
-                                    // new leader for now.
-                                    let ovr = diff - duration_ms;
-                                    alive = ovr <= 1000; // allow 1s drift
-                                }
-
-                                if alive {
-                                    info!("leader active (not me)");
-                                    leader.store(0, Ordering::Relaxed); // reset heartbeat
-                                    locked = true;
-                                    break 'single;
+                if let Ok(v) = rx.recv() {
+                    'single: loop {
+                        // We are leader now.
+                        if token.load(Ordering::Acquire) == v.token as u64 {
+                            leader.fetch_add(1, Ordering::Relaxed);
+                            if leader.load(Ordering::Acquire) == 1 {
+                                let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                                if let Ok(_) = tx_main.send(ProtoCtrl::Heartbeat(tx)) {
+                                    if let Err(_) = rx.recv() {} // ignore
                                 }
                             }
 
+                            info!("leader active (me)");
+                            locked = true;
                             break 'single;
                         }
+
+                        if v.diff <= 0 {
+                            break 'single;
+                        }
+
+                        // We're not leader now (diff > 0).
+                        let mut alive: bool = false;
+                        let diff = v.diff as u64;
+                        if diff <= duration_ms {
+                            alive = true;
+                        } else if diff > duration_ms {
+                            // Sometimes, its going to go beyond duration+drift, even
+                            // in normal situations. In that case, we will allow a
+                            // new leader for now.
+                            let ovr = diff - duration_ms;
+                            alive = ovr <= 1000; // allow 1s drift
+                        }
+
+                        if alive {
+                            info!("leader active (not me)");
+                            leader.store(0, Ordering::Relaxed); // reset heartbeat
+                            locked = true;
+                            break 'single;
+                        }
+
+                        break 'single;
                     }
-                    Err(_) => continue,
                 }
 
                 if locked {
-                    continue;
+                    continue 'outer;
                 }
 
                 if initial {
-                    // Attempt first ever lock. The return commit timestamp will be our fencing
-                    // token. Only one node should be able to do this successfully.
+                    // Attempt first ever lock. The return commit timestamp will be
+                    // our fencing token. Only one node should be able to do this.
                     initial = false;
                     let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                    if let Ok(_) = tx_main.send(ProtoCtrl::InitialLock(tx)) {
-                        if let Ok(t) = rx.recv() {
-                            if t > -1 {
-                                token.store(t as u64, Ordering::Relaxed);
-                                info!("init: got the lock with token {}", t);
-                            }
+                    if let Err(_) = tx_main.send(ProtoCtrl::InitialLock(tx)) {
+                        continue 'outer;
+                    }
+
+                    if let Ok(t) = rx.recv() {
+                        if t > -1 {
+                            token.store(t as u64, Ordering::Relaxed);
+                            info!("init: got the lock with token {}", t);
                         }
                     }
                 } else {
                     // For the succeeding lock attempts.
                     let (tx, rx): (Sender<Record>, Receiver<Record>) = channel();
-                    if let Ok(_) = tx_main.send(ProtoCtrl::CurrentToken(tx)) {
-                        if let Ok(v) = rx.recv() {
-                            if v.token < 0 {
-                                continue;
-                            }
+                    if let Err(_) = tx_main.send(ProtoCtrl::CurrentToken(tx)) {
+                        continue 'outer;
+                    }
 
-                            // Attempt to grab the next lock. Multiple nodes could potentially
-                            // do this successfully.
-                            let mut update = false;
-                            let mut token_up: i128 = 0;
-                            let mut name = String::new();
-                            write!(&mut name, "{}_{}", lock_name, v.token).unwrap();
-                            let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                            if let Ok(_) = tx_main.send(ProtoCtrl::NextLockInsert { name, tx }) {
-                                if let Ok(t) = rx.recv() {
-                                    if t > 0 {
-                                        update = true;
-                                        token_up = t;
-                                    }
-                                }
-                            }
+                    let mut token_in: i128 = -1;
+                    if let Ok(v) = rx.recv() {
+                        if v.token > 0 {
+                            token_in = v.token;
+                        }
+                    }
 
-                            if update {
-                                // We got the lock. Attempt to update the current token
-                                // to this commit timestamp.
-                                let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
-                                if let Ok(_) = tx_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
-                                    if let Ok(t) = rx.recv() {
-                                        if t > 0 {
-                                            // Doesn't mean we're leader, yet.
-                                            token.store(token_up as u64, Ordering::Relaxed);
-                                            info!("next: got the lock with token {}", token_up);
-                                        }
-                                    }
-                                }
-                            }
+                    if token_in < 0 {
+                        continue 'outer;
+                    }
+
+                    // Attempt to grab the next lock. Multiple nodes could potentially
+                    // do this successfully.
+                    let mut update = false;
+                    let mut token_up: i128 = 0;
+                    let mut name = String::new();
+                    write!(&mut name, "{}_{}", lock_name, token_in).unwrap();
+                    let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                    if let Err(_) = tx_main.send(ProtoCtrl::NextLockInsert { name, tx }) {
+                        continue 'outer;
+                    }
+
+                    if let Ok(t) = rx.recv() {
+                        if t > 0 {
+                            update = true;
+                            token_up = t;
+                        }
+                    }
+
+                    if !update {
+                        continue 'outer;
+                    }
+
+                    // We got the lock. Attempt to update the current token to this commit timestamp.
+                    let (tx, rx): (Sender<i128>, Receiver<i128>) = channel();
+                    if let Err(_) = tx_main.send(ProtoCtrl::NextLockUpdate { token: token_up, tx }) {
+                        continue 'outer;
+                    }
+
+                    if let Ok(t) = rx.recv() {
+                        if t > 0 {
+                            // Doesn't mean we're leader, yet.
+                            token.store(token_up as u64, Ordering::Relaxed);
+                            info!("next: got the lock with token {}", token_up);
                         }
                     }
                 }

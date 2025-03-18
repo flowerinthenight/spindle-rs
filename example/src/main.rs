@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .db(args[1].clone())
         .table(args[2].clone())
         .name("spindle-rs".to_string())
-        .duration_ms(5000)
+        .duration_ms(3000)
         .build();
 
     lock.run();
