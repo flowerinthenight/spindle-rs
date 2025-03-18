@@ -313,12 +313,14 @@ impl Lock {
 
         let token = self.token.clone();
         let (tx, rx): (Sender<Record>, Receiver<Record>) = channel();
-        if let Ok(_) = self.tx_ctrl[0].send(ProtoCtrl::CurrentToken(tx)) {
-            if let Ok(t) = rx.recv() {
-                let tv = t.token as u64;
-                if tv == token.load(Ordering::Acquire) {
-                    return (true, t.writer, tv);
-                }
+        if let Err(_) = self.tx_ctrl[0].send(ProtoCtrl::CurrentToken(tx)) {
+            return (false, String::from(""), 0);
+        }
+
+        if let Ok(t) = rx.recv() {
+            let tv = t.token as u64;
+            if tv == token.load(Ordering::Acquire) {
+                return (true, t.writer, tv);
             }
         }
 
