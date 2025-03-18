@@ -7,6 +7,8 @@
 //! If you want one host/node/pod to be the leader within a cluster/group, you can achieve that with this
 //! library. When the leader fails, it will fail over to another host/node/pod within a specific timeout.
 
+use anyhow::Result;
+use anyhow::anyhow;
 use exp_backoff::BackoffBuilder;
 use google_cloud_spanner::client::Client;
 use google_cloud_spanner::client::ClientConfig;
@@ -92,13 +94,19 @@ impl Lock {
 
         // Setup Spanner query thread. Delegate to a separate thread to have
         // a better control over how async calls are blocked on a Tokio runtime.
+        let (tx_ok, rx_ok): (Sender<Result<()>>, Receiver<Result<()>>) = channel();
         let (tx_ctrl, rx_ctrl): (Sender<ProtoCtrl>, Receiver<ProtoCtrl>) = channel();
         self.tx_ctrl.push(tx_ctrl.clone());
         let db = self.db.clone();
         let table = self.table.clone();
         let lock_name = self.name.clone();
         let node_id = self.id.clone();
-        thread::spawn(move || spanner_caller(db, table, lock_name, node_id, rx_ctrl));
+        thread::spawn(move || spanner_caller(db, table, lock_name, node_id, rx_ctrl, tx_ok));
+
+        if let Err(e) = rx_ok.recv().unwrap() {
+            error!("{e}");
+            return;
+        }
 
         // Setup the heartbeat thread (leader only). No proper exit here;
         // let the OS do the cleanup upon termination of the main thread.
@@ -397,9 +405,39 @@ impl LockBuilder {
 // here through ProtoCtrl commands using channels for exchanging information. This is an easier
 // approach for allowing our main threads to have access to async function calls. Here, a single
 // tokio runtime is being used to block on these async calls.
-fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: Receiver<ProtoCtrl>) {
+fn spanner_caller(
+    db: String,
+    table: String,
+    name: String,
+    id: String,
+    rx_ctrl: Receiver<ProtoCtrl>,
+    tx_ok: Sender<Result<()>>,
+) {
     let rt = Runtime::new().unwrap();
-    let client = get_spanner_client(&rt, db);
+    let (tx, rx): (Sender<Option<Client>>, Receiver<Option<Client>>) = channel();
+    rt.block_on(async {
+        let config = ClientConfig::default().with_auth().await;
+        match config {
+            Err(_) => tx.send(None).unwrap(),
+            Ok(v) => {
+                let client = Client::new(db, v).await;
+                match client {
+                    Err(_) => tx.send(None).unwrap(),
+                    Ok(v) => tx.send(Some(v)).unwrap(),
+                }
+            }
+        }
+    });
+
+    let read = rx.recv().unwrap();
+    if read.is_none() {
+        tx_ok.send(Err(anyhow!("client failed"))).unwrap();
+        return;
+    }
+
+    let client = read.unwrap(); // shouldn't panic
+    tx_ok.send(Ok(())).unwrap(); // inform main we're okay
+
     for code in rx_ctrl {
         match code {
             ProtoCtrl::Exit => {
@@ -654,17 +692,6 @@ fn spanner_caller(db: String, table: String, name: String, id: String, rx_ctrl: 
             }
         }
     }
-}
-
-fn get_spanner_client(rt: &Runtime, db: String) -> Client {
-    let (tx, rx) = channel();
-    rt.block_on(async {
-        let config = ClientConfig::default().with_auth().await.unwrap();
-        let client = Client::new(db, config).await.unwrap();
-        tx.send(client).unwrap();
-    });
-
-    rx.recv().unwrap()
 }
 
 #[cfg(test)]

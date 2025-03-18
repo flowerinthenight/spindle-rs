@@ -16,3 +16,4 @@ log = "0.4.26"
 time = "0.3.39"
 scopeguard = "1.2.0"
 uuid = { version = "1.16.0", features = ["v4"] }
+anyhow = "1.0.97"
