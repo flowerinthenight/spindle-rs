@@ -1,13 +1,13 @@
+use anyhow::Result;
 use ctrlc;
 use log::*;
 use spindle_rs::*;
 use std::env;
-use std::error::Error;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let (tx, rx) = channel();
-    ctrlc::set_handler(move || tx.send(()).unwrap()).unwrap();
+    ctrlc::set_handler(move || tx.send(()).unwrap())?;
     let mut lock = LockBuilder::new()
         .db(args[1].clone())
         .table(args[2].clone())
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .duration_ms(3000)
         .build();
 
-    lock.run().unwrap();
+    lock.run()?;
 
     // Wait for a bit before calling has_lock().
     thread::sleep(Duration::from_secs(10));
@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     info!("has_lock: {locked}, {node}, {token}");
 
     // Wait for Ctrl-C.
-    rx.recv().unwrap();
+    rx.recv()?;
     lock.close();
 
     Ok(())
