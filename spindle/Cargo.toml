@@ -13,7 +13,7 @@ tokio = { version = "1.43.0", features = ["full"] }
 google-cloud-spanner = { package="gcloud-spanner", version="1.0.0" }
 exp_backoff = "0.1.4"
 log = "0.4.26"
-time = "0.3.39"
+time = "0.3.40"
 scopeguard = "1.2.0"
 uuid = { version = "1.16.0", features = ["v4"] }
 anyhow = "1.0.97"
