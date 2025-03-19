@@ -60,6 +60,8 @@ $ git clone https://github.com/flowerinthenight/spindle-rs
 $ cd spindle-rs/
 $ cargo build
 # Update args with your actual values:
+#   args[1] = database string
+#   args[2] = table name
 $ RUST_LOG=info ./target/debug/example \
   projects/p/instances/i/databases/db \
   locktable
