@@ -28,7 +28,7 @@ use spindle_rs::*;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx) = channel();
-    ctrlc::set_handler(move || tx.send(()).unwrap()).unwrap();
+    ctrlc::set_handler(move || tx.send(()).unwrap())?;
     let mut lock = LockBuilder::new()
         .db("projects/p/instances/i/databases/db".to_string())
         .table("locktable".to_string()) // see CREATE TABLE
@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .duration_ms(3000)
         .build();
 
-    lock.run().unwrap();
+    lock.run()?;
 
     // Wait for a bit before calling has_lock().
     thread::sleep(Duration::from_secs(10));
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("has_lock: {locked}, {node}, {token}");
 
     // Wait for Ctrl-C.
-    rx.recv().unwrap();
+    rx.recv()?;
     lock.close();
 
     Ok(())
