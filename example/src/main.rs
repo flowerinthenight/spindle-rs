@@ -23,6 +23,7 @@ fn main() -> Result<()> {
         .table(args[2].clone())
         .name("spindle-rs".to_string())
         .duration_ms(3000)
+        .callback(Some(|v| info!("callback: leader={v}")))
         .build();
 
     lock.run()?;

@@ -54,6 +54,9 @@ enum ProtoCtrl {
     Heartbeat(Sender<i128>),
 }
 
+/// `Callback` sets the value of 1 if leader, else 0.
+pub type Callback = fn(i32);
+
 /// `Lock` implements distributed locking using Spanner as backing
 /// storage and TrueTime as our source of global true time.
 pub struct Lock {
@@ -64,6 +67,7 @@ pub struct Lock {
     duration_ms: u64,
     active: Arc<AtomicUsize>,
     token: Arc<AtomicU64>,
+    callback: Option<Callback>,
     tx_ctrl: Vec<Sender<ProtoCtrl>>,
 }
 
@@ -157,6 +161,7 @@ impl Lock {
         let tx_main = tx_ctrl.clone();
         let token = self.token.clone();
         let lock_name = self.name.clone();
+        let callback = self.callback;
         thread::spawn(move || {
             let mut round: u64 = 0;
             let mut initial = true;
@@ -194,6 +199,10 @@ impl Lock {
                                 }
                             }
 
+                            if callback.is_some() {
+                                callback.unwrap()(1);
+                            }
+
                             info!("leader active (me)");
                             locked = true;
                             break 'single;
@@ -217,6 +226,10 @@ impl Lock {
                         }
 
                         if alive {
+                            if callback.is_some() {
+                                callback.unwrap()(0);
+                            }
+
                             info!("leader active (not me)");
                             leader.store(0, Ordering::Relaxed); // reset heartbeat
                             locked = true;
@@ -348,6 +361,7 @@ pub struct LockBuilder {
     name: String,
     id: String,
     duration_ms: u64,
+    callback: Option<Callback>,
 }
 
 impl LockBuilder {
@@ -380,6 +394,11 @@ impl LockBuilder {
         self
     }
 
+    pub fn callback(mut self, c: Option<Callback>) -> LockBuilder {
+        self.callback = c;
+        self
+    }
+
     pub fn build(self) -> Lock {
         Lock {
             db: self.db,
@@ -394,6 +413,7 @@ impl LockBuilder {
             duration_ms: self.duration_ms,
             active: Arc::new(AtomicUsize::new(0)),
             token: Arc::new(AtomicU64::new(0)),
+            callback: self.callback,
             tx_ctrl: vec![],
         }
     }
