@@ -242,6 +242,10 @@ impl Lock {
                     continue 'outer;
                 }
 
+                if let Some(tx_v) = &tx_leader_0 {
+                    tx_v.send(0).unwrap();
+                }
+
                 if initial {
                     // Attempt first ever lock. The return commit timestamp will be
                     // our fencing token. Only one node should be able to do this.
