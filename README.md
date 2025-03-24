@@ -34,7 +34,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .table("locktable".to_string()) // see CREATE TABLE
         .name("spindle-rs".to_string()) // lock name
         .duration_ms(3000)
-        .callback(Some(|v| println!("callback: leader={v}")))
         .build();
 
     lock.run()?;

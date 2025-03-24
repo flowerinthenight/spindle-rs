@@ -16,6 +16,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Optional (but faster) way of knowing if we
+    // are leader or not. 1 = leader, 0 = not.
+    let (tx_ldr, rx_ldr) = channel();
+
     let (tx, rx) = channel();
     ctrlc::set_handler(move || tx.send(()).unwrap())?;
     let mut lock = LockBuilder::new()
@@ -23,13 +27,25 @@ fn main() -> Result<()> {
         .table(args[2].clone())
         .name("spindle-rs".to_string())
         .duration_ms(3000)
-        .callback(Some(|v| info!("callback: leader={v}")))
+        .leader_tx(Some(tx_ldr)) // optional
         .build();
 
     lock.run()?;
 
+    thread::spawn(move || {
+        loop {
+            match rx_ldr.recv() {
+                Ok(v) => info!("leader: {v}"),
+                Err(e) => error!("recv failed: {e}"),
+            };
+        }
+    });
+
     // Wait for a bit before calling has_lock().
     thread::sleep(Duration::from_secs(10));
+
+    // Traditional way of knowing whether we are
+    // leader or not (other than channels).
     let (locked, node, token) = lock.has_lock();
     info!("has_lock: {locked}, {node}, {token}");
 

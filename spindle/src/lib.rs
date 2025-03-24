@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{any::Any, thread};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -54,9 +54,6 @@ enum ProtoCtrl {
     Heartbeat(Sender<i128>),
 }
 
-/// `Callback` sets the value of 1 if leader, else 0.
-pub type Callback = fn(i32);
-
 /// `Lock` implements distributed locking using Spanner as backing
 /// storage and TrueTime as our source of global true time.
 pub struct Lock {
@@ -67,7 +64,7 @@ pub struct Lock {
     duration_ms: u64,
     active: Arc<AtomicUsize>,
     token: Arc<AtomicU64>,
-    callback: Option<Callback>,
+    tx_leader: Vec<Option<Sender<usize>>>,
     tx_ctrl: Vec<Sender<ProtoCtrl>>,
 }
 
@@ -161,7 +158,8 @@ impl Lock {
         let tx_main = tx_ctrl.clone();
         let token = self.token.clone();
         let lock_name = self.name.clone();
-        let callback = self.callback;
+        let tx_leader_1 = self.tx_leader[0].clone();
+        let tx_leader_0 = self.tx_leader[0].clone();
         thread::spawn(move || {
             let mut round: u64 = 0;
             let mut initial = true;
@@ -199,8 +197,8 @@ impl Lock {
                                 }
                             }
 
-                            if callback.is_some() {
-                                callback.unwrap()(1);
+                            if let Some(tx_v) = &tx_leader_1 {
+                                tx_v.send(1).unwrap();
                             }
 
                             info!("leader active (me)");
@@ -226,8 +224,8 @@ impl Lock {
                         }
 
                         if alive {
-                            if callback.is_some() {
-                                callback.unwrap()(0);
+                            if let Some(tx_v) = &tx_leader_0 {
+                                tx_v.send(0).unwrap();
                             }
 
                             info!("leader active (not me)");
@@ -361,7 +359,7 @@ pub struct LockBuilder {
     name: String,
     id: String,
     duration_ms: u64,
-    callback: Option<Callback>,
+    tx_leader: Vec<Option<Sender<usize>>>,
 }
 
 impl LockBuilder {
@@ -394,8 +392,8 @@ impl LockBuilder {
         self
     }
 
-    pub fn callback(mut self, c: Option<Callback>) -> LockBuilder {
-        self.callback = c;
+    pub fn leader_tx(mut self, tx_leader: Option<Sender<usize>>) -> LockBuilder {
+        self.tx_leader = vec![tx_leader];
         self
     }
 
@@ -413,7 +411,7 @@ impl LockBuilder {
             duration_ms: self.duration_ms,
             active: Arc::new(AtomicUsize::new(0)),
             token: Arc::new(AtomicU64::new(0)),
-            callback: self.callback,
+            tx_leader: self.tx_leader,
             tx_ctrl: vec![],
         }
     }
