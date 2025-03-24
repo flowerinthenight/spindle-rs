@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     // are leader or not. 1 = leader, 0 = not.
     let (tx_ldr, rx_ldr) = channel();
 
-    let (tx, rx) = channel();
+    let (tx, rx) = channel(); // for ctrl-c
     ctrlc::set_handler(move || tx.send(()).unwrap())?;
     let mut lock = LockBuilder::new()
         .db(args[1].clone())
