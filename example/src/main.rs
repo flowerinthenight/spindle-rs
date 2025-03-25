@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         .db(args[1].clone())
         .table(args[2].clone())
         .name("spindle-rs".to_string())
-        .duration_ms(3000)
+        .lease_ms(3000)
         .leader_tx(Some(tx_ldr)) // optional
         .build();
 

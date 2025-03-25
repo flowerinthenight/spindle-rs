@@ -61,7 +61,7 @@ pub struct Lock {
     table: String,
     name: String,
     id: String,
-    duration_ms: u64,
+    lease_ms: u64,
     active: Arc<AtomicUsize>,
     token: Arc<AtomicU64>,
     tx_leader: Vec<Option<Sender<usize>>>,
@@ -77,9 +77,9 @@ impl Lock {
     /// Starts the main lock loop. This function doesn't block. If the duration is
     /// set to less than 1s, it will default to 1s (minimum).
     pub fn run(&mut self) -> Result<(), anyhow::Error> {
-        let mut duration_ms = self.duration_ms;
-        if duration_ms < 1_000 {
-            duration_ms = 1_000;
+        let mut lease_ms = self.lease_ms;
+        if lease_ms < 1_000 {
+            lease_ms = 1_000;
         }
 
         info!(
@@ -87,7 +87,7 @@ impl Lock {
             self.table,
             self.name,
             self.id,
-            Duration::from_millis(duration_ms)
+            Duration::from_millis(lease_ms)
         );
 
         let leader = Arc::new(AtomicUsize::new(0));
@@ -108,8 +108,8 @@ impl Lock {
         // Setup the heartbeat thread (leader only). No proper exit here;
         // let the OS do the cleanup upon termination of the main thread.
         let ldr_hb = leader.clone();
-        let min = (duration_ms / 10) * 5;
-        let max = (duration_ms / 10) * 8;
+        let min = (lease_ms / 10) * 5;
+        let max = (lease_ms / 10) * 8;
         let tx_hb = tx_ctrl.clone();
         thread::spawn(move || {
             info!(
@@ -168,9 +168,9 @@ impl Lock {
                 let start = Instant::now();
 
                 defer! {
-                    let mut pause = duration_ms;
+                    let mut pause = lease_ms;
                     let latency = start.elapsed().as_millis() as u64;
-                    if latency < duration_ms && (pause-latency) > 0{
+                    if latency < lease_ms && (pause-latency) > 0{
                         pause -= latency;
                     }
 
@@ -213,13 +213,13 @@ impl Lock {
                         // We're not leader now (diff > 0).
                         let mut alive: bool = false;
                         let diff = v.diff as u64;
-                        if diff <= duration_ms {
+                        if diff <= lease_ms {
                             alive = true;
-                        } else if diff > duration_ms {
+                        } else if diff > lease_ms {
                             // Sometimes, its going to go beyond duration+drift, even
                             // in normal situations. In that case, we will allow a
                             // new leader for now.
-                            let ovr = diff - duration_ms;
+                            let ovr = diff - lease_ms;
                             alive = ovr <= 1000; // allow 1s drift
                         }
 
@@ -362,7 +362,7 @@ pub struct LockBuilder {
     table: String,
     name: String,
     id: String,
-    duration_ms: u64,
+    lease_ms: u64,
     tx_leader: Vec<Option<Sender<usize>>>,
 }
 
@@ -371,31 +371,39 @@ impl LockBuilder {
         LockBuilder::default()
     }
 
+    /// Sets the Spanner database connection string.
     pub fn db(mut self, db: String) -> LockBuilder {
         self.db = db;
         self
     }
 
+    /// Sets the Spanner table name for the backing storage.
     pub fn table(mut self, table: String) -> LockBuilder {
         self.table = table;
         self
     }
 
+    /// Sets the lock name.
     pub fn name(mut self, name: String) -> LockBuilder {
         self.name = name;
         self
     }
 
+    /// Sets the instance (or node) id.
     pub fn id(mut self, id: String) -> LockBuilder {
         self.id = id;
         self
     }
 
-    pub fn duration_ms(mut self, ms: u64) -> LockBuilder {
-        self.duration_ms = ms;
+    /// Sets lease time (in ms) for the leader.
+    pub fn lease_ms(mut self, ms: u64) -> LockBuilder {
+        self.lease_ms = ms;
         self
     }
 
+    /// Sets a send channel for the caller to be informed whether this instance
+    /// is leader or not (1 or 0). This is optional. You can still get the current
+    /// leader (along with other leader attributes) through has_lock().
     pub fn leader_tx(mut self, tx_leader: Option<Sender<usize>>) -> LockBuilder {
         self.tx_leader = vec![tx_leader];
         self
@@ -412,7 +420,7 @@ impl LockBuilder {
                 let id = Uuid::new_v4();
                 id.to_string()
             },
-            duration_ms: self.duration_ms,
+            lease_ms: self.lease_ms,
             active: Arc::new(AtomicUsize::new(0)),
             token: Arc::new(AtomicU64::new(0)),
             tx_leader: self.tx_leader,
@@ -745,7 +753,7 @@ mod tests {
             .db("projects/p/instances/i/databases/db".to_string())
             .table("locktable".to_string())
             .name("spindle-rs".to_string())
-            .duration_ms(5000)
+            .lease_ms(5000)
             .build();
 
         let (locked, _, token) = lock.has_lock();
