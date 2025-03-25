@@ -342,6 +342,8 @@ impl Lock {
             let tv = t.token as u64;
             if tv == token.load(Ordering::Acquire) {
                 return (true, t.writer, tv);
+            } else {
+                return (false, t.writer, tv);
             }
         }
 
