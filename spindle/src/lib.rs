@@ -343,7 +343,18 @@ impl Lock {
             if tv == token.load(Ordering::Acquire) {
                 return (true, t.writer, tv);
             } else {
-                return (false, t.writer, tv);
+                let mut lease_ms = self.lease_ms;
+                if lease_ms < 1_000 {
+                    lease_ms = 1_000;
+                }
+
+                // 'heartbeat' here represents the diff between
+                // last heartbeat and current time (TrueTime).
+                if (t.heartbeat as u64) <= lease_ms {
+                    return (false, t.writer, tv);
+                } else {
+                    return (false, String::from(""), 0);
+                }
             }
         }
 
@@ -661,8 +672,10 @@ fn spanner_caller(
                 let (tx_in, rx_in): (Sender<Record>, Receiver<Record>) = channel();
                 rt.block_on(async {
                     let mut q = String::new();
-                    write!(&mut q, "select token, writer from {} ", table).unwrap();
-                    write!(&mut q, "where name = @name").unwrap();
+                    write!(&mut q, "select token, writer, ").unwrap();
+                    write!(&mut q, "timestamp_diff(current_timestamp(), ",).unwrap();
+                    write!(&mut q, "heartbeat, millisecond) as diff ",).unwrap();
+                    write!(&mut q, "from {} where name = @name", table).unwrap();
                     let mut stmt = Statement::new(q);
                     stmt.add_param("name", &name);
                     let mut tx = client.single().await.unwrap();
@@ -671,10 +684,11 @@ fn spanner_caller(
                     while let Some(row) = iter.next().await.unwrap() {
                         let t = row.column_by_name::<CommitTimestamp>("token").unwrap();
                         let w = row.column_by_name::<String>("writer").unwrap();
+                        let d = row.column_by_name::<i64>("diff").unwrap();
                         tx_in
                             .send(Record {
                                 name: String::from(""),
-                                heartbeat: 0,
+                                heartbeat: d as i128,
                                 token: t.unix_timestamp_nanos(),
                                 writer: w,
                             })
