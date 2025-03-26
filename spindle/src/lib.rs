@@ -55,7 +55,7 @@ enum ProtoCtrl {
 }
 
 /// `Lock` implements distributed locking using Spanner as backing
-/// storage and TrueTime as our source of global true time.
+/// storage and TrueTime as its source of global true time.
 pub struct Lock {
     db: String,
     table: String,
@@ -361,6 +361,7 @@ impl Lock {
         return (false, String::from(""), 0);
     }
 
+    /// Closes this instance.
     pub fn close(&mut self) {
         if let Err(e) = self.tx_ctrl[0].send(ProtoCtrl::Exit) {
             error!("ProtoCtrl::Exit failed: {e}");
