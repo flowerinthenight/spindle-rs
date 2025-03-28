@@ -9,18 +9,22 @@
 
 use anyhow::{Result, anyhow};
 use exp_backoff::BackoffBuilder;
-use google_cloud_spanner::client::Client;
-use google_cloud_spanner::client::ClientConfig;
-use google_cloud_spanner::statement::Statement;
-use google_cloud_spanner::value::CommitTimestamp;
+use google_cloud_spanner::{
+    client::{Client, ClientConfig},
+    statement::Statement,
+    value::CommitTimestamp,
+};
 use log::*;
-use std::fmt::Write as _;
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{
+    fmt::Write as _,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc::{Receiver, Sender, channel},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 use time::OffsetDateTime;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -170,7 +174,7 @@ impl Lock {
                 defer! {
                     let mut pause = lease_ms;
                     let latency = start.elapsed().as_millis() as u64;
-                    if latency < lease_ms && (pause-latency) > 0{
+                    if latency < lease_ms && (pause-latency) > 0 {
                         pause -= latency;
                     }
 
