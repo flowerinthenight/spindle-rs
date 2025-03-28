@@ -2,10 +2,7 @@ use anyhow::Result;
 use ctrlc;
 use log::*;
 use spindle_rs::*;
-use std::env;
-use std::sync::mpsc::channel;
-use std::thread;
-use std::time::Duration;
+use std::{env, sync::mpsc::channel, thread, time::Duration};
 
 fn main() -> Result<()> {
     env_logger::init();
