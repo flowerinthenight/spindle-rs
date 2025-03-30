@@ -1,4 +1,4 @@
-//! This crate implements distributed locking using [Cloud Spanner](https://cloud.google.com/spanner/).
+//! A distributed locking implementation using [Cloud Spanner](https://cloud.google.com/spanner/).
 //! It relies on Spanner's [TrueTime](https://cloud.google.com/spanner/docs/true-time-external-consistency)
 //! and [transactions](https://cloud.google.com/spanner/docs/transactions) support to achieve its locking
 //! mechanism. It's a port of [spindle](https://github.com/flowerinthenight/spindle).
@@ -58,7 +58,7 @@ enum ProtoCtrl {
     Heartbeat(Sender<i128>),
 }
 
-/// `Lock` implements distributed locking using Spanner as backing
+/// Implements distributed locking using Spanner as backing
 /// storage and TrueTime as its source of global true time.
 pub struct Lock {
     db: String,
@@ -373,7 +373,7 @@ impl Lock {
     }
 }
 
-/// `LockBuilder` builds an instance of Lock with default values.
+/// Builds an instance of `Lock` with default values.
 #[derive(Default)]
 pub struct LockBuilder {
     db: String,
@@ -427,6 +427,7 @@ impl LockBuilder {
         self
     }
 
+    /// Builds the final `Lock` object.
     pub fn build(self) -> Lock {
         Lock {
             db: self.db,
