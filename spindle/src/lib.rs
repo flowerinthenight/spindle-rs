@@ -386,6 +386,7 @@ pub struct LockBuilder {
 }
 
 impl LockBuilder {
+    /// Creates a new `LockBuilder` instance with default values.
     pub fn new() -> LockBuilder {
         LockBuilder::default()
     }
