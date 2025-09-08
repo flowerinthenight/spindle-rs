@@ -520,7 +520,7 @@ fn spanner_caller(
                     let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
-                            let ts = s.0.unwrap();
+                            let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
@@ -561,7 +561,7 @@ fn spanner_caller(
                     let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
-                            let ts = s.0.unwrap();
+                            let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
@@ -615,7 +615,7 @@ fn spanner_caller(
                     let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
-                            let ts = s.0.unwrap();
+                            let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
@@ -745,7 +745,7 @@ fn spanner_caller(
                     let res = t.end(res, None).await;
                     match res {
                         Ok(s) => {
-                            let ts = s.0.unwrap();
+                            let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
                                 .unwrap()
                                 .replace_nanosecond(ts.nanos as u32)
