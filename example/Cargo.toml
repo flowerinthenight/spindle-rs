@@ -5,15 +5,15 @@ edition = "2024"
 
 [dependencies]
 spindle_rs = { path = "../spindle" }
-tokio = { version = "1.46.1", features = ["full"] }
-google-cloud-spanner = { package="gcloud-spanner", version="1.2.0" }
+tokio = { version = "1.47.1", features = ["full"] }
+google-cloud-spanner = { package="gcloud-spanner", version="1.4.0" }
 env_logger = "0.11.8"
-log = "0.4.27"
-ctrlc = "3.4.6"
-anyhow = "1.0.97"
+log = "0.4.28"
+ctrlc = "3.5.0"
+anyhow = "1.0.99"
 # We don't depend on rustls, but it's panicking without this.
 # https://github.com/rustls/rustls/issues/1938
-rustls = { version = "0.23.26", default-features = false, features = [
+rustls = { version = "0.23.31", default-features = false, features = [
     "ring",
     "logging",
     "std",
