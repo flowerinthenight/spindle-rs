@@ -191,7 +191,7 @@ impl Lock {
 
                 let mut locked = false;
                 if let Ok(v) = rx.recv() {
-                    'single: loop {
+                    (|| {
                         // We are leader now.
                         if token.load(Ordering::Acquire) == v.token as u64 {
                             leader.fetch_add(1, Ordering::Relaxed);
@@ -208,11 +208,11 @@ impl Lock {
 
                             info!("leader active (me)");
                             locked = true;
-                            break 'single;
+                            return;
                         }
 
                         if v.diff <= 0 {
-                            break 'single;
+                            return;
                         }
 
                         // We're not leader now (diff > 0).
@@ -236,11 +236,9 @@ impl Lock {
                             info!("leader active (not me)");
                             leader.store(0, Ordering::Relaxed); // reset heartbeat
                             locked = true;
-                            break 'single;
+                            return;
                         }
-
-                        break 'single;
-                    }
+                    })();
                 }
 
                 if locked {
@@ -519,6 +517,10 @@ fn spanner_caller(
                     let res = t.update(stmt).await;
                     let res = t.end(res, None).await;
                     match res {
+                        Err(e) => {
+                            error!("InitialLock DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
                         Ok(s) => {
                             let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
@@ -527,10 +529,6 @@ fn spanner_caller(
                                 .unwrap();
                             debug!("InitialLock commit timestamp: {dt}");
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(e) => {
-                            error!("InitialLock DML failed: {e}");
-                            tx_in.send(-1).unwrap();
                         }
                     };
                 });
@@ -560,6 +558,10 @@ fn spanner_caller(
                     let res = t.update(stmt).await;
                     let res = t.end(res, None).await;
                     match res {
+                        Err(e) => {
+                            error!("NextLockInsert DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
                         Ok(s) => {
                             let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
@@ -567,10 +569,6 @@ fn spanner_caller(
                                 .replace_nanosecond(ts.nanos as u32)
                                 .unwrap();
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(e) => {
-                            error!("NextLockInsert DML failed: {e}");
-                            tx_in.send(-1).unwrap();
                         }
                     };
                 });
@@ -614,6 +612,10 @@ fn spanner_caller(
 
                     let res = t.end(res, None).await;
                     match res {
+                        Err(e) => {
+                            error!("NextLockUpdate DML failed: {e}");
+                            tx_in.send(-1).unwrap();
+                        }
                         Ok(s) => {
                             let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
@@ -621,10 +623,6 @@ fn spanner_caller(
                                 .replace_nanosecond(ts.nanos as u32)
                                 .unwrap();
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
-                        }
-                        Err(e) => {
-                            error!("NextLockUpdate DML failed: {e}");
-                            tx_in.send(-1).unwrap();
                         }
                     };
                 });
@@ -744,6 +742,7 @@ fn spanner_caller(
                     let res = t.update(stmt).await;
                     let res = t.end(res, None).await;
                     match res {
+                        Err(_) => tx_in.send(-1).unwrap(),
                         Ok(s) => {
                             let ts = s.0.timestamp.unwrap();
                             let dt = OffsetDateTime::from_unix_timestamp(ts.seconds)
@@ -753,7 +752,6 @@ fn spanner_caller(
                             debug!("Heartbeat commit timestamp: {dt}");
                             tx_in.send(dt.unix_timestamp_nanos()).unwrap();
                         }
-                        Err(_) => tx_in.send(-1).unwrap(),
                     };
                 });
 
