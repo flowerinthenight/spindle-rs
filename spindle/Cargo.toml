@@ -1,6 +1,6 @@
 [package]
 name = "spindle_rs"
-version = "0.2.16"
+version = "0.2.17"
 edition = "2024"
 authors = ["flowerinthenight <root@flowerinthenight.com>"]
 description = "A distributed locking crate built on Cloud Spanner and TrueTime."
@@ -10,8 +10,8 @@ keywords = ["leader-election", "distributed-locking", "distributed-lock", "spann
 
 [dependencies]
 tokio = { version = "1.47.1", features = ["full"] }
-google-cloud-spanner = { package="gcloud-spanner", version="1.4.0" }
-exp_backoff = "0.1.5"
+google-cloud-spanner = { package="gcloud-spanner", version="1.4.1" }
+exp_backoff = "0.1.6"
 log = "0.4.28"
 time = "0.3.43"
 scopeguard = "1.2.0"
