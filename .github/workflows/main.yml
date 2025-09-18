@@ -19,17 +19,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build example
+    - name: 'Build example'
       if: ${{ ! startsWith(github.event.ref, 'refs/tags/v') }}
       run: |
         cargo build
 
-    - name: Run tests
+    - name: 'Run tests'
       if: ${{ ! startsWith(github.event.ref, 'refs/tags/v') }}
       run: |
         cargo test
 
-    - name: Release from tags
+    - name: 'Release from tags'
       if: startsWith(github.event.ref, 'refs/tags/v')
       env:
         GH_TOKEN: ${{ secrets.GH_TOKEN }}
