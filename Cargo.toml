@@ -1,3 +1,31 @@
 [workspace]
 resolver = "2"
-members = ["example","spindle"]
+members = ["example", "spindle"]
+
+[workspace.package]
+version = "0.2.19"
+edition = "2024"
+authors = ["flowerinthenight <root@flowerinthenight.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/flowerinthenight/spindle-rs"
+keywords = ["leader-election", "distributed-locking", "distributed-lock", "spanner"]
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+ctrlc = "3.5.0"
+env_logger = "0.11.8"
+exp_backoff = "0.1.6"
+google-cloud-spanner = { package = "gcloud-spanner", version = "1.4.1" }
+log = "0.4.28"
+# We don't depend on rustls, but it's panicking without this.
+# https://github.com/rustls/rustls/issues/1938
+rustls = { version = "0.23.32", default-features = false, features = [
+    "ring",
+    "logging",
+    "std",
+    "tls12",
+] }
+scopeguard = "1.2.0"
+time = "0.3.44"
+tokio = { version = "1.47.1", features = ["full"] }
+uuid = { version = "1.18.1", features = ["v4"] }
