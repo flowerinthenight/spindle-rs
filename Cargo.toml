@@ -3,7 +3,7 @@ resolver = "2"
 members = ["example", "spindle"]
 
 [workspace.package]
-version = "1.2.22"
+version = "1.2.23"
 edition = "2024"
 authors = ["flowerinthenight <root@flowerinthenight.com>"]
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ keywords = ["leader-election", "distributed-locking", "distributed-lock", "spann
 
 [workspace.dependencies]
 anyhow = "1.0.100"
-ctrlc = "3.5.0"
+ctrlc = "3.5.1"
 env_logger = "0.11.8"
 exp_backoff = "0.1.6"
 google-cloud-spanner = { package = "gcloud-spanner", version = "1.4.1" }
