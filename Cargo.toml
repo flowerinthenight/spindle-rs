@@ -3,7 +3,7 @@ resolver = "2"
 members = ["example", "spindle"]
 
 [workspace.package]
-version = "1.2.23"
+version = "1.2.24"
 edition = "2024"
 authors = ["flowerinthenight <root@flowerinthenight.com>"]
 license = "Apache-2.0"
@@ -19,7 +19,7 @@ google-cloud-spanner = { package = "gcloud-spanner", version = "1.4.1" }
 log = "0.4.28"
 # We don't depend on rustls, but it's panicking without this.
 # https://github.com/rustls/rustls/issues/1938
-rustls = { version = "0.23.34", default-features = false, features = [
+rustls = { version = "0.23.35", default-features = false, features = [
     "ring",
     "logging",
     "std",
