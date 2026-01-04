@@ -3,7 +3,7 @@ resolver = "2"
 members = ["example", "spindle"]
 
 [workspace.package]
-version = "1.2.26"
+version = "1.2.27"
 edition = "2024"
 authors = ["flowerinthenight <root@flowerinthenight.com>"]
 license = "Apache-2.0"
@@ -27,5 +27,5 @@ rustls = { version = "0.23.35", default-features = false, features = [
 ] }
 scopeguard = "1.2.0"
 time = "0.3.44"
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 uuid = { version = "1.19.0", features = ["v4"] }
